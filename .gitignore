@@ -1,0 +1,12 @@
+# Binaries
+*.exe
+
+# Build Artifacts
+_absBuildDir/
+_absReleaseDir/
+
+# Tools
+.tools/
+.thyme/
+internal/bin/*
+!internal/bin/.gitkeep
