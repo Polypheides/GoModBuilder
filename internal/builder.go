@@ -22,16 +22,17 @@ import (
 )
 
 type ModBuilder struct {
-	ItemsConfig *ModBundleItems
-	PacksConfig *ModBundlePacks
-	ProjectDir  string
-	BuildDir    string
-	ReleaseDir  string
-	Folders     *ModFolders
-	Logger      func(string)
-	LogMutex    sync.Mutex
-	Parallel    bool
-	procSem     chan struct{} // Global semaphore for external processes
+	ItemsConfig   *ModBundleItems
+	PacksConfig   *ModBundlePacks
+	ProjectDir    string
+	CustomGameDir string // Manual Path Override
+	BuildDir      string
+	ReleaseDir    string
+	Folders       *ModFolders
+	Logger        func(string)
+	LogMutex      sync.Mutex
+	Parallel      bool
+	procSem       chan struct{} // Global semaphore for external processes
 
 	// Baseline Management
 	BaselineFilenames map[string]bool
@@ -293,6 +294,9 @@ func (b *ModBuilder) GetLanguageRegistryKeys(exeName string) []string {
 }
 
 func (b *ModBuilder) GetGameDir(defaultDir, exeName string) string {
+	if b.CustomGameDir != "" {
+		return b.CustomGameDir
+	}
 	dir := defaultDir
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(b.ProjectDir, defaultDir)
