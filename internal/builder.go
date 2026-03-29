@@ -52,6 +52,18 @@ func NewModBuilder(items *ModBundleItems, packs *ModBundlePacks, projectDir stri
 	return b
 }
 
+func (b *ModBuilder) SetProjectDir(dir string) {
+	b.ProjectDir = dir
+	b.BuildDir = filepath.Join(dir, "_absBuildDir")
+	b.ReleaseDir = filepath.Join(dir, "_absReleaseDir")
+
+	// Re-apply custom folder configurations if they exist
+	if b.Folders != nil {
+		b.SetFolders(b.Folders)
+	}
+	b.LoadBaseline()
+}
+
 func (b *ModBuilder) LoadBaseline() {
 	baselinePath := filepath.Join(b.ProjectDir, "VanillaBaseline.json")
 	data, err := os.ReadFile(baselinePath)
