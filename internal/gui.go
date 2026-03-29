@@ -34,6 +34,7 @@ type ModBuilderWindow struct {
 	packs               *ModBundlePacks
 	cmExe               *walk.ComboBox
 	leProjectDir        *walk.LineEdit
+	leGameDir           *walk.LineEdit
 	model               []string
 }
 
@@ -133,6 +134,20 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 								Model:        []string{"generalszh.exe", "generalsv.exe"},
 								CurrentIndex: 0,
 							},
+							declarative.Label{Text: "Game Directory:"},
+							declarative.Composite{
+								Layout: declarative.HBox{MarginsZero: true},
+								Children: []declarative.Widget{
+									declarative.LineEdit{AssignTo: &mw.leGameDir, ReadOnly: true},
+									declarative.PushButton{
+										Text:    "...",
+										MaxSize: declarative.Size{Width: 30},
+										OnClicked: func() {
+											mw.selectGameDir()
+										},
+									},
+								},
+							},
 							declarative.Label{Text: "Project Directory:"},
 							declarative.Composite{
 								Layout: declarative.HBox{MarginsZero: true},
@@ -162,6 +177,15 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 		log.Fatal(err)
 	}
 
+	// Pre-populate the Game Directory using auto-discovery on startup
+	initialExe := mw.cmExe.Text()
+	if initialExe == "" {
+		initialExe = "generalszh.exe"
+	}
+	detectedDir := mw.builder.GetGameDir("", initialExe)
+	mw.leGameDir.SetText(detectedDir)
+	mw.builder.CustomGameDir = detectedDir
+
 	// Intercept Shift key to block range selection
 	// The user specifically wants Ctrl-multi-select BUT NO Shift-multi-select
 	mw.lbPacks.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
@@ -187,6 +211,36 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 	})
 
 	mw.Run()
+}
+
+func (mw *ModBuilderWindow) selectGameDir() {
+	dlg := new(walk.FileDialog)
+	dlg.Title = "Select Game Directory"
+
+	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
+		exeName := mw.cmExe.Text()
+		if exeName == "" {
+			exeName = "generalszh.exe"
+		}
+
+		// Validation check
+		hasExe := false
+		if _, err := os.Stat(filepath.Join(dlg.FilePath, exeName)); err == nil {
+			hasExe = true
+		} else if _, err := os.Stat(filepath.Join(dlg.FilePath, "generals.exe")); err == nil {
+			hasExe = true
+		} else if _, err := os.Stat(filepath.Join(dlg.FilePath, "generalszh.exe")); err == nil {
+			hasExe = true
+		}
+
+		if !hasExe {
+			walk.MsgBox(mw, "Warning", fmt.Sprintf("Neither '%s' nor standard game executables were found in the selected directory.\nThe path will be applied, but the game might fail to run or install.", exeName), walk.MsgBoxIconWarning)
+		}
+
+		mw.leGameDir.SetText(dlg.FilePath)
+		mw.builder.CustomGameDir = dlg.FilePath
+		mw.log(fmt.Sprintf("Game directory manually overridden to: %s", dlg.FilePath))
+	}
 }
 
 func (mw *ModBuilderWindow) executeSequence() {
