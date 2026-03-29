@@ -147,7 +147,7 @@ func (b *ModBuilder) CleanAll() error {
 	return nil
 }
 
-func (b *ModBuilder) RunGame(gameDir, exeName, language string) error {
+func (b *ModBuilder) RunGame(gameDir, exeName, language, launchArgs string) error {
 	finalDir := b.GetGameDir(gameDir, exeName)
 	fullPath := filepath.Join(finalDir, exeName)
 
@@ -157,8 +157,11 @@ func (b *ModBuilder) RunGame(gameDir, exeName, language string) error {
 		}
 	}
 
-	b.log("Launching %s from: %s", exeName, finalDir)
-	cmd := exec.Command(fullPath, "-win", "-quickstart")
+	b.log("Launching %s from: %s with args: %s", exeName, finalDir, launchArgs)
+
+	// Parse space-separated arguments
+	args := strings.Fields(launchArgs)
+	cmd := exec.Command(fullPath, args...)
 	cmd.Dir = finalDir
 	return cmd.Start()
 }
