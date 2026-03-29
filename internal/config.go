@@ -251,9 +251,11 @@ type InstalledState struct {
 }
 
 type AppSettings struct {
-	CustomGameDir string `json:"customGameDir"`
-	SelectedExe   string `json:"selectedExe"`
-	LaunchArgs    string `json:"launchArgs"`
+	CustomGameDir  string   `json:"customGameDir"`
+	SelectedExe    string   `json:"selectedExe"`
+	LaunchArgs     string   `json:"launchArgs"`
+	ProjectHistory []string `json:"projectHistory"`
+	GameDirHistory []string `json:"gameDirHistory"`
 }
 
 func LoadAppSettings(path string) (*AppSettings, error) {
@@ -265,6 +267,15 @@ func LoadAppSettings(path string) (*AppSettings, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
+
+	// Normalize histories to ensure absolute paths and correct slashes
+	for i, p := range config.ProjectHistory {
+		config.ProjectHistory[i] = filepath.Clean(filepath.FromSlash(p))
+	}
+	for i, p := range config.GameDirHistory {
+		config.GameDirHistory[i] = filepath.Clean(filepath.FromSlash(p))
+	}
+
 	return &config, nil
 }
 
