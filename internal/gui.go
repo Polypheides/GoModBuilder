@@ -27,6 +27,7 @@ type ModBuilderWindow struct {
 	cbSequenceSnapshot  *walk.CheckBox
 	cbSequenceRun       *walk.CheckBox
 	cbSequenceUninstall *walk.CheckBox
+	cbOptionAutoClear   *walk.CheckBox
 	cbOptionVerbose     *walk.CheckBox
 	cbOptionParallel    *walk.CheckBox
 	builder             *ModBuilder
@@ -52,125 +53,143 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 
 	if err := (declarative.MainWindow{
 		AssignTo: &mw.MainWindow,
-		Title:    "Go Mod Builder v1.0 by Polypheides",
+		Title:    "Go Mod Builder v1.1 by Polypheides",
 		Icon:     mw.getAppIcon(),
-		Size:     declarative.Size{Width: 800, Height: 480},
-		Font:     declarative.Font{PointSize: 8},
-		Layout:   declarative.VBox{MarginsZero: true},
+		Size:     declarative.Size{Width: 950, Height: 550},
+		MinSize:  declarative.Size{Width: 850, Height: 450},
+		Font:     declarative.Font{Family: "Segoe UI", PointSize: 9}, // Modern UI Font
+		Layout:   declarative.VBox{Margins: declarative.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 10},
 		Children: []declarative.Widget{
 			declarative.Composite{
-				Layout: declarative.Grid{Columns: 4, Spacing: 2, Margins: declarative.Margins{Left: 2, Top: 2, Right: 2, Bottom: 2}},
+				Layout: declarative.HBox{MarginsZero: true, Spacing: 10},
 				Children: []declarative.Widget{
+
+					// --- Column 1: Bundle Pack List ---
 					declarative.GroupBox{
-						Title:  "Bundle Pack list",
-						Layout: declarative.VBox{},
+						Title:         "Bundle Pack list",
+						Layout:        declarative.VBox{Spacing: 5},
+						StretchFactor: 2, // Expands to take extra width
 						Children: []declarative.Widget{
 							declarative.Label{
-								Text: "*Hold Ctrl to select multiple packs",
+								Text:        "*Hold Ctrl to select multiple packs",
+								ToolTipText: "Select one or more packs to process.",
 							},
 							declarative.ListBox{
 								AssignTo:       &mw.lbPacks,
 								Model:          mw.model,
 								MultiSelection: true, // Native LBS_EXTENDEDSEL
+								ToolTipText:    "List of available mod bundle packs.",
 							},
 						},
 					},
+
+					// --- Column 2: Sequence Execution ---
 					declarative.GroupBox{
-						Title:  "Sequence execution",
-						Layout: declarative.VBox{},
+						Title:   "Sequence execution",
+						Layout:  declarative.VBox{Spacing: 5},
+						MinSize: declarative.Size{Width: 150}, // Increased for better padding
+						MaxSize: declarative.Size{Width: 150},
 						Children: []declarative.Widget{
-							declarative.CheckBox{AssignTo: &mw.cbSequenceSnapshot, Text: "Snapshot", Checked: true, ToolTipText: "Captures a vanilla baseline of the game directory to ensure perfect mod removal."},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceChangeLog, Text: "Make Change Log"},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceClean, Text: "Clean"},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceBuild, Text: "Build", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceRelease, Text: "Build Release"},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceInstall, Text: "Install", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceRun, Text: "Run Game", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceUninstall, Text: "Uninstall", Checked: true},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceSnapshot, Text: "Snapshot", Checked: true, ToolTipText: "Captures a vanilla baseline of the game directory."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceChangeLog, Text: "Changelog", ToolTipText: "Generates project changelog before building."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceClean, Text: "Clean", ToolTipText: "Cleans build and release directories."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceBuild, Text: "Build", Checked: true, ToolTipText: "Builds selected mod packs."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceRelease, Text: "Build Release", ToolTipText: "Packages the built files into release archives."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceInstall, Text: "Install", Checked: true, ToolTipText: "Installs the selected packs into the game directory."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceRun, Text: "Run Game", Checked: true, ToolTipText: "Launches the game after installation."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceUninstall, Text: "Uninstall", Checked: true, ToolTipText: "Uninstalls the current mod before new actions."},
+							declarative.VSpacer{}, // Pushes execute button to the bottom
 							declarative.PushButton{
-								Text: "Execute",
-								OnClicked: func() {
-									mw.executeSequence()
-								},
+								Text:        "Execute",
+								Font:        declarative.Font{Bold: true},
+								ToolTipText: "Run the selected sequence of actions.",
+								OnClicked:   mw.executeSequence,
 							},
 						},
 					},
+
+					// --- Column 3: Single Actions ---
 					declarative.GroupBox{
-						Title:  "Single actions",
-						Layout: declarative.VBox{},
+						Title:   "Single actions",
+						Layout:  declarative.VBox{Spacing: 5},
+						MinSize: declarative.Size{Width: 150}, // Increased for better padding
+						MaxSize: declarative.Size{Width: 150},
 						Children: []declarative.Widget{
-							declarative.PushButton{
-								Text:        "Snapshot",
-								ToolTipText: "Captures a vanilla baseline of the game directory to ensure perfect mod removal.",
-								OnClicked: func() {
-									gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
-									if err := mw.builder.RefreshBaseline(gameDir); err != nil {
-										mw.log(fmt.Sprintf("Error taking snapshot: %v", err))
-									} else {
-										mw.log("Vanilla Baseline Snapshot created successfully!")
-									}
-								},
-							},
-							declarative.PushButton{Text: "Make Change Log", OnClicked: func() { mw.runMakeChangeLog() }},
-							declarative.PushButton{Text: "Clean", OnClicked: func() { mw.runClean() }},
-							declarative.PushButton{Text: "Build", OnClicked: func() { mw.runBuild() }},
-							declarative.PushButton{Text: "Build Release", OnClicked: func() { mw.runBuildRelease() }},
-							declarative.PushButton{Text: "Install", OnClicked: func() { mw.runInstall() }},
-							declarative.PushButton{Text: "Run Game", OnClicked: func() { mw.runGame() }},
-							declarative.PushButton{Text: "Uninstall", OnClicked: func() { mw.runUninstall() }},
-							declarative.PushButton{Text: "Abort"},
+							declarative.PushButton{Text: "Snapshot", ToolTipText: "Captures a vanilla baseline of the game directory.", OnClicked: func() { mw.checkAutoClear(); mw.runSnapshot() }},
+							declarative.PushButton{Text: "Changelog", ToolTipText: "Generates the project changelog.", OnClicked: func() { mw.checkAutoClear(); mw.runMakeChangeLog() }},
+							declarative.PushButton{Text: "Clean", ToolTipText: "Cleans output directories.", OnClicked: func() { mw.checkAutoClear(); mw.runClean() }},
+							declarative.PushButton{Text: "Build", ToolTipText: "Builds the selected packs.", OnClicked: func() { mw.checkAutoClear(); mw.runBuild() }},
+							declarative.PushButton{Text: "Build Release", ToolTipText: "Packages the build into release files.", OnClicked: func() { mw.checkAutoClear(); mw.runBuildRelease() }},
+							declarative.PushButton{Text: "Install", ToolTipText: "Installs the selected packs.", OnClicked: func() { mw.checkAutoClear(); mw.runInstall() }},
+							declarative.PushButton{Text: "Run Game", ToolTipText: "Launches the game executable.", OnClicked: func() { mw.checkAutoClear(); mw.runGame() }},
+							declarative.PushButton{Text: "Uninstall", ToolTipText: "Removes currently installed mod files.", OnClicked: func() { mw.checkAutoClear(); mw.runUninstall() }},
+							declarative.VSpacer{},
+							declarative.PushButton{Text: "Abort", ToolTipText: "Abort current operations.", OnClicked: mw.runAbort},
 						},
 					},
+
+					// --- Column 4: Options ---
 					declarative.GroupBox{
-						Title:  "Options",
-						Layout: declarative.VBox{},
+						Title:         "Options",
+						Layout:        declarative.Grid{Columns: 3, Spacing: 8}, // Grid layout for perfect alignment
+						StretchFactor: 2,
 						Children: []declarative.Widget{
-							declarative.CheckBox{Text: "Auto Clear Console", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbOptionVerbose, Text: "Verbose Logging", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbOptionParallel, Text: "Parallel Build (Multithreaded)", Checked: true},
+							declarative.CheckBox{AssignTo: &mw.cbOptionAutoClear, Text: "Auto Clear Console", Checked: true, ToolTipText: "Clear the log before running a new action.", ColumnSpan: 3},
+							declarative.CheckBox{AssignTo: &mw.cbOptionVerbose, Text: "Verbose Logging", Checked: true, ToolTipText: "Enable detailed logging output.", ColumnSpan: 3},
+							declarative.CheckBox{AssignTo: &mw.cbOptionParallel, Text: "Parallel Build (Multithreaded)", Checked: true, ToolTipText: "Use multiple CPU cores for building.", ColumnSpan: 3},
+
+							declarative.VSpacer{Size: 8, ColumnSpan: 3}, // Divider
+
+							// Align inputs natively using the grid columns
 							declarative.Label{Text: "Game Executable:"},
 							declarative.ComboBox{
 								AssignTo:     &mw.cmExe,
 								Model:        []string{"generalszh.exe", "generalsv.exe"},
 								CurrentIndex: 0,
+								ToolTipText:  "Select the game executable to target.",
+								ColumnSpan:   2,
 							},
+
 							declarative.Label{Text: "Game Directory:"},
-							declarative.Composite{
-								Layout: declarative.HBox{MarginsZero: true},
-								Children: []declarative.Widget{
-									declarative.LineEdit{AssignTo: &mw.leGameDir, ReadOnly: true},
-									declarative.PushButton{
-										Text:    "...",
-										MaxSize: declarative.Size{Width: 30},
-										OnClicked: func() {
-											mw.selectGameDir()
-										},
-									},
-								},
+							declarative.LineEdit{
+								AssignTo:    &mw.leGameDir,
+								ReadOnly:    true,
+								ToolTipText: "Directory where the game is installed. Can be overridden manually.",
 							},
+							declarative.PushButton{
+								Text:        "...",
+								MaxSize:     declarative.Size{Width: 30},
+								ToolTipText: "Browse for game directory.",
+								OnClicked:   mw.selectGameDir,
+							},
+
 							declarative.Label{Text: "Project Directory:"},
-							declarative.Composite{
-								Layout: declarative.HBox{MarginsZero: true},
-								Children: []declarative.Widget{
-									declarative.LineEdit{AssignTo: &mw.leProjectDir, Text: b.ProjectDir, ReadOnly: true},
-									declarative.PushButton{
-										Text:    "...",
-										MaxSize: declarative.Size{Width: 30},
-										OnClicked: func() {
-											mw.selectProjectDir()
-										},
-									},
-								},
+							declarative.LineEdit{
+								AssignTo:    &mw.leProjectDir,
+								Text:        b.ProjectDir,
+								ReadOnly:    true,
+								ToolTipText: "Directory of the mod project configuration.",
 							},
+							declarative.PushButton{
+								Text:        "...",
+								MaxSize:     declarative.Size{Width: 30},
+								ToolTipText: "Browse for project directory.",
+								OnClicked:   mw.selectProjectDir,
+							},
+
+							declarative.VSpacer{ColumnSpan: 3}, // Anchors the Grid to the top
 						},
 					},
 				},
 			},
+
+			// --- Text Log Area ---
 			declarative.TextEdit{
-				AssignTo: &mw.teLog,
-				ReadOnly: true,
-				VScroll:  true,
-				MinSize:  declarative.Size{Height: 50},
+				AssignTo:    &mw.teLog,
+				ReadOnly:    true,
+				VScroll:     true,
+				MinSize:     declarative.Size{Height: 120},
+				ToolTipText: "Operation logs and console output.",
 			},
 		},
 	}.Create()); err != nil {
@@ -186,12 +205,10 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 	mw.leGameDir.SetText(detectedDir)
 	mw.builder.CustomGameDir = detectedDir
 
-	// Intercept Shift key to block range selection
-	// The user specifically wants Ctrl-multi-select BUT NO Shift-multi-select
+	// Intercept Shift key to block range selection (Ctrl-multi-select BUT NO Shift-multi-select)
 	mw.lbPacks.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if walk.ModifiersDown()&walk.ModShift != 0 {
-			// Get item index from point
-			// LB_ITEMFROMPOINT = 0x01A9
+			// Get item index from point (LB_ITEMFROMPOINT = 0x01A9)
 			res := win.SendMessage(mw.lbPacks.Handle(), 0x01A9, 0, uintptr(win.MAKELONG(uint16(x), uint16(y))))
 			itemIdx := int(win.LOWORD(uint32(res)))
 			isOutside := win.HIWORD(uint32(res)) != 0
@@ -206,57 +223,26 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 		}
 	})
 
-	mw.lbPacks.SelectedIndexesChanged().Attach(func() {
-		// Summary or auto-update logic could go here
-	})
-
 	mw.Run()
 }
 
-func (mw *ModBuilderWindow) selectGameDir() {
-	dlg := new(walk.FileDialog)
-	dlg.Title = "Select Game Directory"
+// --- Logic & Event Handlers ---
 
-	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
-		exeName := mw.cmExe.Text()
-		if exeName == "" {
-			exeName = "generalszh.exe"
-		}
-
-		// Validation check
-		hasExe := false
-		if _, err := os.Stat(filepath.Join(dlg.FilePath, exeName)); err == nil {
-			hasExe = true
-		} else if _, err := os.Stat(filepath.Join(dlg.FilePath, "generals.exe")); err == nil {
-			hasExe = true
-		} else if _, err := os.Stat(filepath.Join(dlg.FilePath, "generalszh.exe")); err == nil {
-			hasExe = true
-		}
-
-		if !hasExe {
-			walk.MsgBox(mw, "Warning", fmt.Sprintf("Neither '%s' nor standard game executables were found in the selected directory.\nThe path will be applied, but the game might fail to run or install.", exeName), walk.MsgBoxIconWarning)
-		}
-
-		mw.leGameDir.SetText(dlg.FilePath)
-		mw.builder.CustomGameDir = dlg.FilePath
-		mw.log(fmt.Sprintf("Game directory manually overridden to: %s", dlg.FilePath))
+func (mw *ModBuilderWindow) checkAutoClear() {
+	if mw.cbOptionAutoClear.Checked() {
+		mw.teLog.SetText("")
 	}
 }
 
 func (mw *ModBuilderWindow) executeSequence() {
+	mw.checkAutoClear()
 	mw.builder.Parallel = mw.cbOptionParallel.Checked()
 
 	if mw.cbSequenceSnapshot.Checked() {
 		// To ensure a truly pristine snapshot, we uninstall the active mod FIRST.
 		mw.builder.Uninstall(mw.cmExe.Text())
-		gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
-		if err := mw.builder.RefreshBaseline(gameDir); err != nil {
-			mw.log(fmt.Sprintf("Snapshot error: %v", err))
-		} else {
-			mw.log("Vanilla Baseline Snapshot updated (Pristine).")
-		}
+		mw.runSnapshot()
 	}
-
 	if mw.cbSequenceChangeLog.Checked() {
 		mw.runMakeChangeLog()
 	}
@@ -277,6 +263,15 @@ func (mw *ModBuilderWindow) executeSequence() {
 	}
 	if mw.cbSequenceUninstall.Checked() {
 		mw.runUninstall()
+	}
+}
+
+func (mw *ModBuilderWindow) runSnapshot() {
+	gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
+	if err := mw.builder.RefreshBaseline(gameDir); err != nil {
+		mw.log(fmt.Sprintf("Error taking snapshot: %v", err))
+	} else {
+		mw.log("Vanilla Baseline Snapshot created successfully!")
 	}
 }
 
@@ -334,13 +329,10 @@ func (mw *ModBuilderWindow) runInstall() {
 		return
 	}
 
-	// Language Filtering Logic:
-	// If multiple language packs are selected, we only want to install the LAST one
-	// to avoid "File Clutter" crashing the game.
+	// Language Filtering Logic
 	finalPacksToInstall := []BundlePack{}
 	var lastLangPack *BundlePack
 
-	// First, find all selected packs
 	allSelectedPacks := []BundlePack{}
 	for _, idx := range indices {
 		pack := mw.packs.Bundles.Packs[idx]
@@ -355,7 +347,6 @@ func (mw *ModBuilderWindow) runInstall() {
 		}
 	}
 
-	// Filter the final list
 	for _, pack := range allSelectedPacks {
 		if pack.SetGameLanguageOnInstall != "" {
 			if lastLangPack != nil && pack.Name == lastLangPack.Name {
@@ -418,16 +409,54 @@ func (mw *ModBuilderWindow) runGame() {
 }
 
 func (mw *ModBuilderWindow) runMakeChangeLog() {
-	mw.log("Running Make Change Log...")
+	mw.log("Generating Changelog...")
 	if err := mw.builder.MakeChangeLog(); err != nil {
-		mw.log(fmt.Sprintf("Make Change Log failed: %v", err))
+		mw.log(fmt.Sprintf("Changelog generation failed: %v", err))
+	} else {
+		mw.log("Changelog generated successfully.")
 	}
+}
+
+func (mw *ModBuilderWindow) runAbort() {
+	mw.log("Abort signaled (Background cancellation currently unhandled).")
 }
 
 func (mw *ModBuilderWindow) log(msg string) {
 	mw.Synchronize(func() {
 		mw.teLog.AppendText(msg + "\r\n")
 	})
+}
+
+// --- Path Management ---
+
+func (mw *ModBuilderWindow) selectGameDir() {
+	dlg := new(walk.FileDialog)
+	dlg.Title = "Select Game Directory"
+
+	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
+		exeName := mw.cmExe.Text()
+		if exeName == "" {
+			exeName = "generalszh.exe"
+		}
+
+		// Validation check
+		hasExe := false
+		if _, err := os.Stat(filepath.Join(dlg.FilePath, exeName)); err == nil {
+			hasExe = true
+		} else if _, err := os.Stat(filepath.Join(dlg.FilePath, "generals.exe")); err == nil {
+			hasExe = true
+		} else if _, err := os.Stat(filepath.Join(dlg.FilePath, "generalszh.exe")); err == nil {
+			hasExe = true
+		}
+
+		if !hasExe {
+			walk.MsgBox(mw, "Warning", fmt.Sprintf("Neither '%s' nor standard game executables were found in the selected directory.\nThe path will be applied, but the game might fail to run or install.", exeName), walk.MsgBoxIconWarning)
+		}
+
+		mw.leGameDir.SetText(dlg.FilePath)
+		mw.builder.CustomGameDir = dlg.FilePath
+		mw.log(fmt.Sprintf("Game directory manually overridden to: %s", dlg.FilePath))
+	}
 }
 
 func (mw *ModBuilderWindow) selectProjectDir() {
@@ -466,7 +495,7 @@ func (mw *ModBuilderWindow) reDiscover() {
 }
 
 func (mw *ModBuilderWindow) getAppIcon() interface{} {
-	// 1. Try to load from embedded PNG (Highest reliability & easiest fix)
+	// 1. Try to load from embedded PNG
 	if len(IconPNG) > 0 {
 		img, _, err := image.Decode(bytes.NewReader(IconPNG))
 		if err == nil {
