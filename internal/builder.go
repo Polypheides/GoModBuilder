@@ -175,7 +175,7 @@ func (b *ModBuilder) RunGame(gameDir, exeName, language, launchArgs string) erro
 	args := strings.Fields(launchArgs)
 	cmd := exec.Command(fullPath, args...)
 	cmd.Dir = finalDir
-	return cmd.Start()
+	return cmd.Run()
 }
 
 func (b *ModBuilder) SetGameLanguage(exeName, language string) error {
