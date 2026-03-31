@@ -49,7 +49,8 @@ type ModBuilderWindow struct {
 	projectModel   []string
 	gameDirModel   []string
 
-	updatingUI bool // Flag to prevent event loops during model refreshes
+	updatingUI bool        // Flag to prevent event loops during model refreshes
+	logChan    chan string // Asynchronous logger channel
 }
 
 // Find the Run function and replace it with:
@@ -66,9 +67,15 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 		mw.packModel[i] = p.Name
 	}
 
-	// Load App Settings
-	cwd, _ := os.Getwd()
-	settingsPath := filepath.Join(b.ProjectDir, "ModBuilderSettings.json")
+	// Load App Settings (Global config should be in the App Root, not the project folder)
+	exePath, err := os.Executable()
+	var cwd string
+	if err == nil {
+		cwd = filepath.Dir(exePath)
+	} else {
+		cwd, _ = os.Getwd()
+	}
+	settingsPath := filepath.Join(cwd, "ModBuilderSettings.json")
 	settings, _ := LoadAppSettings(settingsPath)
 
 	initialExe := "generalszh.exe"
@@ -96,8 +103,7 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 		mw.gameDirHistory = []string{detected}
 	}
 
-	mw.builder.SetProjectDir(mw.projectHistory[0])
-	mw.builder.CustomGameDir = mw.gameDirHistory[0]
+	mw.builder.LoadBaseline() // Load the baseline for the current game dir
 
 	if err := (declarative.MainWindow{
 		AssignTo: &mw.MainWindow,
@@ -236,7 +242,39 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 		log.Fatal(err)
 	}
 
+	// Initialize batched background logger
+	mw.logChan = make(chan string, 10000)
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		var batch []string
+		for {
+			select {
+			case msg, ok := <-mw.logChan:
+				if !ok {
+					return
+				}
+				batch = append(batch, msg)
+			case <-ticker.C:
+				if len(batch) > 0 {
+					text := strings.Join(batch, "\r\n") + "\r\n"
+					batch = nil // clear batch
+					if mw.MainWindow != nil {
+						mw.Synchronize(func() {
+							if mw.teLog != nil {
+								mw.teLog.AppendText(text)
+							}
+						})
+					}
+				}
+			}
+		}
+	}()
+
 	mw.updatingUI = true
+
+	// Fast setup: we do NOT call mw.reDiscover() here because DiscoverConfigs
+	// already executed in main.go! Just populate the models directly.
 	mw.refreshProjectModel()
 	mw.refreshGameDirModel()
 	mw.updateExeList(mw.builder.CustomGameDir)
@@ -472,9 +510,11 @@ func (mw *ModBuilderWindow) runAbort() {
 }
 
 func (mw *ModBuilderWindow) log(msg string) {
-	mw.Synchronize(func() {
-		mw.teLog.AppendText(msg + "\r\n")
-	})
+	if mw.logChan != nil {
+		mw.logChan <- msg
+	} else {
+		fmt.Println(msg)
+	}
 }
 
 // --- Path Management ---
@@ -509,25 +549,54 @@ func addUniqueToHistory(history []string, path string) []string {
 }
 
 func (mw *ModBuilderWindow) commitPathsToHistory() {
-	// Grab currently active text from ComboBoxes (handles manual edits)
 	pDir := mw.cmProjectDir.Text()
-	if pDir != "" && pDir != "... (Browse)" {
+	pChanged := false
+	if pDir != "" && pDir != "... (Browse)" && !strings.EqualFold(pDir, mw.builder.ProjectDir) {
 		mw.projectHistory = addUniqueToHistory(mw.projectHistory, pDir)
 		mw.builder.SetProjectDir(mw.projectHistory[0])
+		pChanged = true
 	}
 
 	gDir := mw.cmGameDir.Text()
-	if gDir != "" && gDir != "... (Browse)" {
+	gChanged := false
+	if gDir != "" && gDir != "... (Browse)" && !strings.EqualFold(gDir, mw.builder.CustomGameDir) {
 		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, gDir)
 		mw.builder.CustomGameDir = mw.gameDirHistory[0]
+		gChanged = true
 	}
 
-	mw.updatingUI = true
-	mw.refreshProjectModel()
-	mw.refreshGameDirModel()
-	mw.updateExeList(mw.builder.CustomGameDir)
-	mw.updatingUI = false
-	mw.saveSettings()
+	if pChanged || gChanged {
+		mw.updatingUI = true
+
+		// Preserve user's selection
+		var oldSelections []int
+		if mw.lbPacks != nil {
+			oldSelections = mw.lbPacks.SelectedIndexes()
+		}
+
+		if pChanged {
+			mw.reDiscover()
+		} else {
+			mw.refreshGameDirModel()
+			mw.updateExeList(mw.builder.CustomGameDir)
+		}
+
+		// Carefully restore selected UI indexes post-update
+		if len(oldSelections) > 0 && mw.lbPacks != nil && mw.packModel != nil {
+			validSelections := []int{}
+			for _, idx := range oldSelections {
+				if idx < len(mw.packModel) {
+					validSelections = append(validSelections, idx)
+				}
+			}
+			if len(validSelections) > 0 {
+				mw.lbPacks.SetSelectedIndexes(validSelections)
+			}
+		}
+
+		mw.updatingUI = false
+		mw.saveSettings()
+	}
 }
 
 func (mw *ModBuilderWindow) refreshProjectModel() {
@@ -536,9 +605,11 @@ func (mw *ModBuilderWindow) refreshProjectModel() {
 		mw.projectModel[i] = p // Display exactly as saved (absolute path)
 	}
 	mw.projectModel = append(mw.projectModel, "... (Browse)")
-	mw.cmProjectDir.SetModel(mw.projectModel)
-	if len(mw.projectHistory) > 0 {
-		mw.cmProjectDir.SetCurrentIndex(0)
+	if mw.cmProjectDir != nil {
+		mw.cmProjectDir.SetModel(mw.projectModel)
+		if len(mw.projectHistory) > 0 {
+			mw.cmProjectDir.SetCurrentIndex(0)
+		}
 	}
 }
 
@@ -548,9 +619,11 @@ func (mw *ModBuilderWindow) refreshGameDirModel() {
 		mw.gameDirModel[i] = p // Display exactly as saved (absolute path)
 	}
 	mw.gameDirModel = append(mw.gameDirModel, "... (Browse)")
-	mw.cmGameDir.SetModel(mw.gameDirModel)
-	if len(mw.gameDirHistory) > 0 {
-		mw.cmGameDir.SetCurrentIndex(0)
+	if mw.cmGameDir != nil {
+		mw.cmGameDir.SetModel(mw.gameDirModel)
+		if len(mw.gameDirHistory) > 0 {
+			mw.cmGameDir.SetCurrentIndex(0)
+		}
 	}
 }
 
@@ -564,7 +637,12 @@ func (mw *ModBuilderWindow) onProjectDirChanged() {
 		return
 	}
 	if idx >= 0 && idx < len(mw.projectHistory) {
-		mw.builder.SetProjectDir(mw.projectHistory[idx])
+		selected := mw.projectHistory[idx]
+		mw.projectHistory = addUniqueToHistory(mw.projectHistory, selected)
+		mw.builder.SetProjectDir(selected)
+		mw.updatingUI = true
+		mw.refreshProjectModel()
+		mw.updatingUI = false
 		mw.reDiscover()
 		mw.saveSettings()
 	}
@@ -580,9 +658,14 @@ func (mw *ModBuilderWindow) onGameDirChanged() {
 		return
 	}
 	if idx >= 0 && idx < len(mw.gameDirHistory) {
-		newDir := mw.gameDirHistory[idx]
-		mw.builder.CustomGameDir = newDir
-		mw.updateExeList(newDir)
+		selected := mw.gameDirHistory[idx]
+		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, selected)
+		mw.builder.CustomGameDir = selected
+		mw.builder.LoadBaseline() // Reload baseline for new game dir
+		mw.updatingUI = true
+		mw.refreshGameDirModel()
+		mw.updateExeList(selected)
+		mw.updatingUI = false
 		mw.saveSettings()
 	}
 }
@@ -636,7 +719,7 @@ func (mw *ModBuilderWindow) selectGameDir() {
 	} else {
 		// Reset to previous top if cancelled to remove "..." from the visual box
 		mw.updatingUI = true
-		if len(mw.gameDirHistory) > 0 {
+		if len(mw.gameDirHistory) > 0 && mw.cmGameDir != nil {
 			mw.cmGameDir.SetCurrentIndex(0)
 		}
 		mw.updatingUI = false
@@ -656,7 +739,7 @@ func (mw *ModBuilderWindow) selectProjectDir() {
 	} else {
 		// Reset to previous top if cancelled to remove "..." from the visual box
 		mw.updatingUI = true
-		if len(mw.projectHistory) > 0 {
+		if len(mw.projectHistory) > 0 && mw.cmProjectDir != nil {
 			mw.cmProjectDir.SetCurrentIndex(0)
 		}
 		mw.updatingUI = false
@@ -674,7 +757,15 @@ func (mw *ModBuilderWindow) saveSettings() {
 		ProjectHistory: mw.projectHistory,
 		GameDirHistory: mw.gameDirHistory,
 	}
-	settingsPath := filepath.Join(mw.builder.ProjectDir, "ModBuilderSettings.json")
+	// Save App Settings (Global config should be in the App Root, not the project folder)
+	exePath, err := os.Executable()
+	var cwd string
+	if err == nil {
+		cwd = filepath.Dir(exePath)
+	} else {
+		cwd, _ = os.Getwd()
+	}
+	settingsPath := filepath.Join(cwd, "ModBuilderSettings.json")
 	SaveAppSettings(settingsPath, settings)
 }
 
@@ -696,8 +787,16 @@ func (mw *ModBuilderWindow) reDiscover() {
 	for i, p := range packs.Bundles.Packs {
 		mw.packModel[i] = p.Name
 	}
-	mw.lbPacks.SetModel(mw.packModel)
-	mw.lbPacks.SetSelectedIndexes([]int{})
+
+	if mw.lbPacks != nil {
+		mw.lbPacks.SetModel(mw.packModel)
+		// Selection is now handled dynamically in commitPathsToHistory
+		// so it will no longer arbitrarily clear
+	}
+
+	mw.refreshProjectModel()
+	mw.refreshGameDirModel()
+	mw.updateExeList(mw.builder.CustomGameDir)
 
 	mw.log(fmt.Sprintf("Discovery complete: %d items, %d packs in %s", len(items.Bundles.Items), len(packs.Bundles.Packs), configDir))
 }

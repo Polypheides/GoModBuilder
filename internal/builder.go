@@ -1,9 +1,8 @@
 package internal
 
 import (
-	"crypto"
-	_ "crypto/md5"
-	_ "crypto/sha256"
+	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -48,8 +47,24 @@ func NewModBuilder(items *ModBundleItems, packs *ModBundlePacks, projectDir stri
 		procSem:           make(chan struct{}, runtime.NumCPU()),
 		BaselineFilenames: make(map[string]bool),
 	}
-	b.LoadBaseline()
 	return b
+}
+
+func (b *ModBuilder) getMetadataPath(subDir, filename string) string {
+	exePath, err := os.Executable()
+	var cwd string
+	if err == nil {
+		cwd = filepath.Dir(exePath)
+	} else {
+		cwd, _ = os.Getwd()
+	}
+
+	metaDir := filepath.Join(cwd, "metadata")
+	if subDir != "" {
+		metaDir = filepath.Join(metaDir, subDir)
+	}
+	os.MkdirAll(metaDir, 0755)
+	return filepath.Join(metaDir, filename)
 }
 
 func (b *ModBuilder) SetProjectDir(dir string) {
@@ -65,7 +80,7 @@ func (b *ModBuilder) SetProjectDir(dir string) {
 }
 
 func (b *ModBuilder) LoadBaseline() {
-	baselinePath := filepath.Join(b.ProjectDir, "VanillaBaseline.json")
+	baselinePath := b.getMetadataPath("", "VanillaBaseline.json")
 	data, err := os.ReadFile(baselinePath)
 	if err == nil {
 		json.Unmarshal(data, &b.BaselineFilenames)
@@ -73,7 +88,7 @@ func (b *ModBuilder) LoadBaseline() {
 }
 
 func (b *ModBuilder) SaveBaseline() error {
-	baselinePath := filepath.Join(b.ProjectDir, "VanillaBaseline.json")
+	baselinePath := b.getMetadataPath("", "VanillaBaseline.json")
 	data, _ := json.MarshalIndent(b.BaselineFilenames, "", "  ")
 	return os.WriteFile(baselinePath, data, 0644)
 }
@@ -144,7 +159,11 @@ func (b *ModBuilder) log(format string, a ...interface{}) {
 	b.LogMutex.Lock()
 	defer b.LogMutex.Unlock()
 	msg := fmt.Sprintf(format, a...)
+
+	// Print to CLI
 	fmt.Println(msg)
+
+	// Pass to GUI Logger safely
 	if b.Logger != nil {
 		b.Logger(msg)
 	}
@@ -175,7 +194,13 @@ func (b *ModBuilder) RunGame(gameDir, exeName, language, launchArgs string) erro
 	args := strings.Fields(launchArgs)
 	cmd := exec.Command(fullPath, args...)
 	cmd.Dir = finalDir
-	return cmd.Run()
+
+	// Use Run() instead of Start() for game launching to prevent the tool from uninstalling
+	// the mod files before the game is running.
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (b *ModBuilder) SetGameLanguage(exeName, language string) error {
@@ -209,8 +234,8 @@ func (b *ModBuilder) SetGameLanguage(exeName, language string) error {
 				continue
 			}
 
-			// Backup current value if not already backed up
-			backupPath := filepath.Join(b.BuildDir, ".GameLanguage.backup")
+			// Backup current value if not already backed up (Global per-game backup)
+			backupPath := b.getMetadataPath("", "GameLanguageBackup.txt")
 			if _, err := os.Stat(backupPath); os.IsNotExist(err) {
 				currentVal, _, err := key.GetStringValue("Language")
 				if err != nil {
@@ -251,7 +276,7 @@ func (b *ModBuilder) SetGameLanguage(exeName, language string) error {
 }
 
 func (b *ModBuilder) RestoreGameLanguage(exeName string) error {
-	backupPath := filepath.Join(b.BuildDir, ".GameLanguage.backup")
+	backupPath := b.getMetadataPath("", "GameLanguageBackup.txt")
 	data, err := os.ReadFile(backupPath)
 	if err != nil {
 		return nil // No backup, nothing to restore
@@ -329,7 +354,7 @@ func (b *ModBuilder) GetGameDir(defaultDir, exeName string) string {
 }
 
 func (b *ModBuilder) LoadState() (*InstalledState, error) {
-	statePath := filepath.Join(b.BuildDir, "InstalledThings.json")
+	statePath := b.getMetadataPath("", "InstalledThings.json")
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -345,7 +370,7 @@ func (b *ModBuilder) LoadState() (*InstalledState, error) {
 }
 
 func (b *ModBuilder) SaveState(state *InstalledState) error {
-	statePath := filepath.Join(b.BuildDir, "InstalledThings.json")
+	statePath := b.getMetadataPath("", "InstalledThings.json")
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
@@ -438,8 +463,8 @@ func (b *ModBuilder) Uninstall(exeName string) error {
 	// Restore language if backup exists (Global Cleanup)
 	b.RestoreGameLanguage(exeName)
 
-	// Remove state file
-	statePath := filepath.Join(b.BuildDir, "InstalledThings.json")
+	// Remove centralized state file
+	statePath := b.getMetadataPath("", "InstalledThings.json")
 	os.Remove(statePath)
 
 	b.log("Uninstall completed.")
@@ -1469,8 +1494,8 @@ func (b *ModBuilder) generateHashFiles(path string) error {
 	}
 	defer f.Close()
 
-	md5Hash := crypto.MD5.New()
-	sha256Hash := crypto.SHA256.New()
+	md5Hash := md5.New()
+	sha256Hash := sha256.New()
 	var size int64
 
 	buf := make([]byte, 32*1024)
