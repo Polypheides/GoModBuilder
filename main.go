@@ -3,9 +3,9 @@ package main
 //go:generate go run gen.go
 
 import (
+	"GoModBuilder/internal"
 	"flag"
 	"fmt"
-	"GoModBuilder/internal"
 	"log"
 	"os"
 	"path/filepath"
@@ -115,15 +115,15 @@ func main() {
 		if err := b.InstallAll(targetDir, *packFlag, *exeFlag); err != nil {
 			log.Fatalf("Install failed: %v", err)
 		}
-		
+
 		if *runFlag {
-			if err := b.RunGame(targetDir, *exeFlag, ""); err != nil {
+			if err := b.RunGame(targetDir, *exeFlag, "", ""); err != nil {
 				log.Fatalf("Run failed: %v", err)
 			}
 		}
 	} else if *runFlag {
 		targetDir := b.GetGameDir(*targetFlag, *exeFlag)
-		if err := b.RunGame(targetDir, *exeFlag, ""); err != nil {
+		if err := b.RunGame(targetDir, *exeFlag, "", ""); err != nil {
 			log.Fatalf("Run failed: %v", err)
 		}
 	}
