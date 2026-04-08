@@ -8,27 +8,27 @@ import (
 )
 
 type BundleItem struct {
-	Name                     string        `json:"name"`
-	NamePrefix               string        `json:"namePrefix,omitempty"`
-	NameSuffix               string        `json:"nameSuffix,omitempty"`
-	Big                      bool          `json:"big"`
-	BigSuffix                string        `json:"bigSuffix,omitempty"`
-	SetGameLanguageOnInstall string        `json:"setGameLanguageOnInstall,omitempty"`
-	Files                    []BundleFile  `json:"files"`
-	OnPreBuild               *EventConfig  `json:"onPreBuild,omitempty"`
-	OnBuild                  *EventConfig  `json:"onBuild,omitempty"`
-	OnPostBuild              *EventConfig  `json:"onPostBuild,omitempty"`
+	Name                       string       `json:"name"`
+	NamePrefix                 string       `json:"namePrefix,omitempty"`
+	NameSuffix                 string       `json:"nameSuffix,omitempty"`
+	Big                        bool         `json:"big"`
+	BigSuffix                  string       `json:"bigSuffix,omitempty"`
+	SetGameLanguageOnInstall   string       `json:"setGameLanguageOnInstall,omitempty"`
+	Files                      []BundleFile `json:"files"`
+	OnPreBuild                 *EventConfig `json:"onPreBuild,omitempty"`
+	OnBuild                    *EventConfig `json:"onBuild,omitempty"`
+	OnPostBuild                *EventConfig `json:"onPostBuild,omitempty"`
 	OnFinishBuildRawBundleItem *EventConfig `json:"onFinishBuildRawBundleItem,omitempty"`
 }
 
 type BundleFile struct {
-	SourceParent     string            `json:"sourceParent"`
-	Source           string            `json:"source,omitempty"`
-	Target           string            `json:"target,omitempty"`
-	SourceList       []string          `json:"sourceList,omitempty"`
-	SourceTargetList []SourceTarget    `json:"sourceTargetList,omitempty"`
-	RegistryList     []string          `json:"registryList,omitempty"`
-	Params           map[string]interface{} `json:"params,omitempty"`
+	SourceParent       string                 `json:"sourceParent"`
+	Source             string                 `json:"source,omitempty"`
+	Target             string                 `json:"target,omitempty"`
+	SourceList         []string               `json:"sourceList,omitempty"`
+	SourceTargetList   []SourceTarget         `json:"sourceTargetList,omitempty"`
+	RegistryList       []string               `json:"registryList,omitempty"`
+	Params             map[string]interface{} `json:"params,omitempty"`
 	ExcludeMarkersList [][]string             `json:"excludeMarkersList,omitempty"`
 }
 
@@ -131,11 +131,11 @@ type ModChangeLog struct {
 }
 
 type ChangeRecord struct {
-	SourceList       []string `json:"sourceList"`
-	TargetList       []string `json:"targetList"`
+	SourceList       []string                 `json:"sourceList"`
+	TargetList       []string                 `json:"targetList"`
 	SortList         []map[string]interface{} `json:"sortList"`
-	IncludeLabelList []string `json:"includeLabelList"`
-	ExcludeLabelList []string `json:"excludeLabelList"`
+	IncludeLabelList []string                 `json:"includeLabelList"`
+	ExcludeLabelList []string                 `json:"excludeLabelList"`
 }
 
 func DiscoverConfigs(projectDir string) (*ModBundleItems, *ModBundlePacks, error) {
@@ -248,4 +248,41 @@ type InstalledFile struct {
 
 type InstalledState struct {
 	Files []InstalledFile `json:"files"`
+}
+
+type AppSettings struct {
+	CustomGameDir  string   `json:"customGameDir"`
+	SelectedExe    string   `json:"selectedExe"`
+	LaunchArgs     string   `json:"launchArgs"`
+	ProjectHistory []string `json:"projectHistory"`
+	GameDirHistory []string `json:"gameDirHistory"`
+}
+
+func LoadAppSettings(path string) (*AppSettings, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var config AppSettings
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+
+	// Normalize histories to ensure absolute paths and correct slashes
+	for i, p := range config.ProjectHistory {
+		config.ProjectHistory[i] = filepath.Clean(filepath.FromSlash(p))
+	}
+	for i, p := range config.GameDirHistory {
+		config.GameDirHistory[i] = filepath.Clean(filepath.FromSlash(p))
+	}
+
+	return &config, nil
+}
+
+func SaveAppSettings(path string, settings *AppSettings) error {
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
 }

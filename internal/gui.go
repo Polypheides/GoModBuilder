@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/lxn/walk"
@@ -27,15 +28,32 @@ type ModBuilderWindow struct {
 	cbSequenceSnapshot  *walk.CheckBox
 	cbSequenceRun       *walk.CheckBox
 	cbSequenceUninstall *walk.CheckBox
+	cbOptionAutoClear   *walk.CheckBox
 	cbOptionVerbose     *walk.CheckBox
 	cbOptionParallel    *walk.CheckBox
 	builder             *ModBuilder
 	items               *ModBundleItems
 	packs               *ModBundlePacks
-	cmExe               *walk.ComboBox
-	leProjectDir        *walk.LineEdit
-	model               []string
+
+	// Path and Execution Controls
+	cmProjectDir *walk.ComboBox
+	cmGameDir    *walk.ComboBox
+	cmExe        *walk.ComboBox
+	leLaunchArgs *walk.LineEdit
+
+	// Data Models
+	packModel      []string
+	exeModel       []string
+	projectHistory []string
+	gameDirHistory []string
+	projectModel   []string
+	gameDirModel   []string
+
+	updatingUI bool        // Flag to prevent event loops during model refreshes
+	logChan    chan string // Asynchronous logger channel
 }
+
+// Find the Run function and replace it with:
 
 func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 	fmt.Println("Initializing GUI...")
@@ -44,165 +62,283 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 	mw.packs = packs
 	mw.builder = b
 	b.Logger = mw.log
-	mw.model = make([]string, len(packs.Bundles.Packs))
+	mw.packModel = make([]string, len(packs.Bundles.Packs))
 	for i, p := range packs.Bundles.Packs {
-		mw.model[i] = p.Name
+		mw.packModel[i] = p.Name
 	}
+
+	// Load App Settings (Global config should be in the App Root, not the project folder)
+	exePath, err := os.Executable()
+	var cwd string
+	if err == nil {
+		cwd = filepath.Dir(exePath)
+	} else {
+		cwd, _ = os.Getwd()
+	}
+	settingsPath := filepath.Join(cwd, "ModBuilderSettings.json")
+	settings, _ := LoadAppSettings(settingsPath)
+
+	initialExe := "generalszh.exe"
+	initialArgs := "-win -quickstart"
+	if settings != nil {
+		if settings.SelectedExe != "" {
+			initialExe = settings.SelectedExe
+		}
+		if settings.LaunchArgs != "" {
+			initialArgs = settings.LaunchArgs
+		}
+		mw.projectHistory = settings.ProjectHistory
+		mw.gameDirHistory = settings.GameDirHistory
+	}
+
+	// Fallbacks if history is empty
+	if len(mw.projectHistory) == 0 {
+		mw.projectHistory = []string{b.ProjectDir}
+		if b.ProjectDir == "" {
+			mw.projectHistory = []string{cwd}
+		}
+	}
+	if len(mw.gameDirHistory) == 0 {
+		detected := b.GetGameDir("", initialExe)
+		mw.gameDirHistory = []string{detected}
+	}
+
+	mw.builder.SetProjectDir(mw.projectHistory[0])
+	mw.builder.CustomGameDir = mw.gameDirHistory[0]
+	mw.builder.LoadBaseline() // Load the baseline for the current game dir
 
 	if err := (declarative.MainWindow{
 		AssignTo: &mw.MainWindow,
-		Title:    "Go Mod Builder v1.0 by Polypheides",
+		Title:    "Go Mod Builder v1.1 by Polypheides",
 		Icon:     mw.getAppIcon(),
-		Size:     declarative.Size{Width: 800, Height: 480},
-		Font:     declarative.Font{PointSize: 8},
-		Layout:   declarative.VBox{MarginsZero: true},
+		Size:     declarative.Size{Width: 950, Height: 550},
+		MinSize:  declarative.Size{Width: 850, Height: 450},
+		Font:     declarative.Font{Family: "Segoe UI", PointSize: 9},
+		Layout:   declarative.VBox{Margins: declarative.Margins{Left: 10, Top: 10, Right: 10, Bottom: 10}, Spacing: 10},
 		Children: []declarative.Widget{
 			declarative.Composite{
-				Layout: declarative.Grid{Columns: 4, Spacing: 2, Margins: declarative.Margins{Left: 2, Top: 2, Right: 2, Bottom: 2}},
+				Layout: declarative.HBox{MarginsZero: true, Spacing: 10},
 				Children: []declarative.Widget{
+
+					// --- Column 1: Bundle Pack List ---
 					declarative.GroupBox{
-						Title:  "Bundle Pack list",
-						Layout: declarative.VBox{},
+						Title:         "Bundle Pack list",
+						Layout:        declarative.VBox{Spacing: 5},
+						StretchFactor: 2, // Expands to take extra width
 						Children: []declarative.Widget{
 							declarative.Label{
-								Text: "*Hold Ctrl to select multiple packs",
+								Text:        "*Hold Ctrl to select multiple packs",
+								ToolTipText: "Select one or more packs to process.",
 							},
 							declarative.ListBox{
 								AssignTo:       &mw.lbPacks,
-								Model:          mw.model,
+								Model:          mw.packModel,
 								MultiSelection: true, // Native LBS_EXTENDEDSEL
+								ToolTipText:    "List of available mod bundle packs.",
 							},
 						},
 					},
+
+					// --- Column 2: Sequence Execution ---
 					declarative.GroupBox{
-						Title:  "Sequence execution",
-						Layout: declarative.VBox{},
+						Title:   "Sequence execution",
+						Layout:  declarative.VBox{Spacing: 5},
+						MinSize: declarative.Size{Width: 150}, // Increased for better padding
+						MaxSize: declarative.Size{Width: 150},
 						Children: []declarative.Widget{
-							declarative.CheckBox{AssignTo: &mw.cbSequenceSnapshot, Text: "Snapshot", Checked: true, ToolTipText: "Captures a vanilla baseline of the game directory to ensure perfect mod removal."},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceChangeLog, Text: "Make Change Log"},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceClean, Text: "Clean"},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceBuild, Text: "Build", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceRelease, Text: "Build Release"},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceInstall, Text: "Install", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceRun, Text: "Run Game", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbSequenceUninstall, Text: "Uninstall", Checked: true},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceSnapshot, Text: "Snapshot", Checked: true, ToolTipText: "Captures a vanilla baseline of the game directory."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceChangeLog, Text: "Changelog", ToolTipText: "Generates project changelog before building."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceClean, Text: "Clean", ToolTipText: "Cleans build and release directories."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceBuild, Text: "Build", Checked: true, ToolTipText: "Builds selected mod packs."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceRelease, Text: "Build Release", ToolTipText: "Packages the built files into release archives."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceInstall, Text: "Install", Checked: true, ToolTipText: "Installs the selected packs into the game directory."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceRun, Text: "Run Game", Checked: true, ToolTipText: "Launches the game after installation."},
+							declarative.CheckBox{AssignTo: &mw.cbSequenceUninstall, Text: "Uninstall", Checked: true, ToolTipText: "Uninstalls the current mod before new actions."},
+							declarative.VSpacer{}, // Pushes execute button to the bottom
 							declarative.PushButton{
-								Text: "Execute",
-								OnClicked: func() {
-									mw.executeSequence()
-								},
+								Text:        "Execute",
+								Font:        declarative.Font{Bold: true},
+								ToolTipText: "Run the selected sequence of actions.",
+								OnClicked:   mw.executeSequence,
 							},
 						},
 					},
+
+					// --- Column 3: Single Actions ---
 					declarative.GroupBox{
-						Title:  "Single actions",
-						Layout: declarative.VBox{},
+						Title:   "Single actions",
+						Layout:  declarative.VBox{Spacing: 5},
+						MinSize: declarative.Size{Width: 150}, // Increased for better padding
+						MaxSize: declarative.Size{Width: 150},
 						Children: []declarative.Widget{
-							declarative.PushButton{
-								Text:        "Snapshot",
-								ToolTipText: "Captures a vanilla baseline of the game directory to ensure perfect mod removal.",
-								OnClicked: func() {
-									gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
-									if err := mw.builder.RefreshBaseline(gameDir); err != nil {
-										mw.log(fmt.Sprintf("Error taking snapshot: %v", err))
-									} else {
-										mw.log("Vanilla Baseline Snapshot created successfully!")
-									}
-								},
-							},
-							declarative.PushButton{Text: "Make Change Log", OnClicked: func() { mw.runMakeChangeLog() }},
-							declarative.PushButton{Text: "Clean", OnClicked: func() { mw.runClean() }},
-							declarative.PushButton{Text: "Build", OnClicked: func() { mw.runBuild() }},
-							declarative.PushButton{Text: "Build Release", OnClicked: func() { mw.runBuildRelease() }},
-							declarative.PushButton{Text: "Install", OnClicked: func() { mw.runInstall() }},
-							declarative.PushButton{Text: "Run Game", OnClicked: func() { mw.runGame() }},
-							declarative.PushButton{Text: "Uninstall", OnClicked: func() { mw.runUninstall() }},
-							declarative.PushButton{Text: "Abort"},
+							declarative.PushButton{Text: "Snapshot", ToolTipText: "Captures a vanilla baseline of the game directory.", OnClicked: func() { mw.prepareAction(); mw.runSnapshot() }},
+							declarative.PushButton{Text: "Changelog", ToolTipText: "Generates the project changelog.", OnClicked: func() { mw.prepareAction(); mw.runMakeChangeLog() }},
+							declarative.PushButton{Text: "Clean", ToolTipText: "Cleans output directories.", OnClicked: func() { mw.prepareAction(); mw.runClean() }},
+							declarative.PushButton{Text: "Build", ToolTipText: "Builds the selected packs.", OnClicked: func() { mw.prepareAction(); mw.runBuild() }},
+							declarative.PushButton{Text: "Build Release", ToolTipText: "Packages the build into release files.", OnClicked: func() { mw.prepareAction(); mw.runBuildRelease() }},
+							declarative.PushButton{Text: "Install", ToolTipText: "Installs the selected packs.", OnClicked: func() { mw.prepareAction(); mw.runInstall() }},
+							declarative.PushButton{Text: "Run Game", ToolTipText: "Launches the game executable.", OnClicked: func() { mw.prepareAction(); mw.runGame() }},
+							declarative.PushButton{Text: "Uninstall", ToolTipText: "Removes currently installed mod files.", OnClicked: func() { mw.prepareAction(); mw.runUninstall() }},
+							declarative.VSpacer{},
+							declarative.PushButton{Text: "Abort", ToolTipText: "Abort current operations.", OnClicked: mw.runAbort},
 						},
 					},
+
+					// --- Column 4: Options ---
 					declarative.GroupBox{
-						Title:  "Options",
-						Layout: declarative.VBox{},
+						Title:         "Options",
+						Layout:        declarative.Grid{Columns: 2, Spacing: 8}, // Grid layout for perfect alignment
+						StretchFactor: 3,
 						Children: []declarative.Widget{
-							declarative.CheckBox{Text: "Auto Clear Console", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbOptionVerbose, Text: "Verbose Logging", Checked: true},
-							declarative.CheckBox{AssignTo: &mw.cbOptionParallel, Text: "Parallel Build (Multithreaded)", Checked: true},
+							declarative.CheckBox{AssignTo: &mw.cbOptionAutoClear, Text: "Auto Clear Console", Checked: true, ToolTipText: "Clear the log before running a new action.", ColumnSpan: 2},
+							declarative.CheckBox{AssignTo: &mw.cbOptionVerbose, Text: "Verbose Logging", Checked: true, ToolTipText: "Enable detailed logging output.", ColumnSpan: 2},
+							declarative.CheckBox{AssignTo: &mw.cbOptionParallel, Text: "Parallel Build (Multithreaded)", Checked: true, ToolTipText: "Use multiple CPU cores for building.", ColumnSpan: 2},
+							declarative.VSpacer{Size: 8, ColumnSpan: 2},
+
+							declarative.Label{Text: "Project Directory:"},
+							declarative.ComboBox{
+								AssignTo:    &mw.cmProjectDir,
+								Editable:    true,
+								MinSize:     declarative.Size{Width: 200}, // Prevent window stretching
+								ToolTipText: "Directory of the mod project configuration.",
+							},
+
+							declarative.Label{Text: "Game Directory:"},
+							declarative.ComboBox{
+								AssignTo:    &mw.cmGameDir,
+								Editable:    true,
+								MinSize:     declarative.Size{Width: 200}, // Prevent window stretching
+								ToolTipText: "Directory where the game is installed.",
+							},
+
 							declarative.Label{Text: "Game Executable:"},
 							declarative.ComboBox{
-								AssignTo:     &mw.cmExe,
-								Model:        []string{"generalszh.exe", "generalsv.exe"},
-								CurrentIndex: 0,
+								AssignTo:    &mw.cmExe,
+								ToolTipText: "Select the game executable to target.",
+								ColumnSpan:  2,
 							},
-							declarative.Label{Text: "Project Directory:"},
-							declarative.Composite{
-								Layout: declarative.HBox{MarginsZero: true},
-								Children: []declarative.Widget{
-									declarative.LineEdit{AssignTo: &mw.leProjectDir, Text: b.ProjectDir, ReadOnly: true},
-									declarative.PushButton{
-										Text:    "...",
-										MaxSize: declarative.Size{Width: 30},
-										OnClicked: func() {
-											mw.selectProjectDir()
-										},
-									},
-								},
+
+							declarative.Label{Text: "Launch Arguments:"},
+							declarative.LineEdit{
+								AssignTo:    &mw.leLaunchArgs,
+								Text:        initialArgs,
+								ToolTipText: "Custom command line arguments for the game.",
+								ColumnSpan:  2,
 							},
+							declarative.VSpacer{ColumnSpan: 2}, // Anchors the Grid to the top
 						},
 					},
 				},
 			},
+
+			// --- Text Log Area ---
 			declarative.TextEdit{
-				AssignTo: &mw.teLog,
-				ReadOnly: true,
-				VScroll:  true,
-				MinSize:  declarative.Size{Height: 50},
+				AssignTo:    &mw.teLog,
+				ReadOnly:    true,
+				VScroll:     true,
+				MinSize:     declarative.Size{Height: 120},
+				ToolTipText: "Operation logs and console output.",
 			},
 		},
 	}.Create()); err != nil {
 		log.Fatal(err)
 	}
 
-	// Intercept Shift key to block range selection
-	// The user specifically wants Ctrl-multi-select BUT NO Shift-multi-select
+	// Initialize batched background logger
+	mw.logChan = make(chan string, 10000)
+	go func() {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		var batch []string
+		for {
+			select {
+			case msg, ok := <-mw.logChan:
+				if !ok {
+					return
+				}
+				batch = append(batch, msg)
+			case <-ticker.C:
+				if len(batch) > 0 {
+					text := strings.Join(batch, "\r\n") + "\r\n"
+					batch = nil // clear batch
+					if mw.MainWindow != nil {
+						mw.Synchronize(func() {
+							if mw.teLog != nil {
+								mw.teLog.AppendText(text)
+							}
+						})
+					}
+				}
+			}
+		}
+	}()
+
+	mw.updatingUI = true
+
+	// Ensure we rediscover because the saved MRU Project Dir might be different
+	// from the default directory main.go used during startup.
+	mw.reDiscover()
+
+	mw.refreshProjectModel()
+	mw.refreshGameDirModel()
+	mw.updateExeList(mw.builder.CustomGameDir)
+
+	// Set initial executable selection
+	exeIdx := -1
+	for i, name := range mw.exeModel {
+		if strings.EqualFold(name, initialExe) {
+			exeIdx = i
+			break
+		}
+	}
+	if exeIdx >= 0 {
+		mw.cmExe.SetCurrentIndex(exeIdx)
+	} else if len(mw.exeModel) > 0 {
+		mw.cmExe.SetCurrentIndex(0)
+	}
+	mw.updatingUI = false
+
+	// Attach Event Listeners
+	mw.cmProjectDir.CurrentIndexChanged().Attach(mw.onProjectDirChanged)
+	mw.cmGameDir.CurrentIndexChanged().Attach(mw.onGameDirChanged)
+	mw.cmExe.CurrentIndexChanged().Attach(mw.saveSettings)
+	mw.leLaunchArgs.TextChanged().Attach(mw.saveSettings)
+
+	// Intercept Shift key to block range selection (Ctrl-multi-select BUT NO Shift-multi-select)
 	mw.lbPacks.MouseDown().Attach(func(x, y int, button walk.MouseButton) {
 		if walk.ModifiersDown()&walk.ModShift != 0 {
-			// Get item index from point
-			// LB_ITEMFROMPOINT = 0x01A9
+			// Get item index from point (LB_ITEMFROMPOINT = 0x01A9)
 			res := win.SendMessage(mw.lbPacks.Handle(), 0x01A9, 0, uintptr(win.MAKELONG(uint16(x), uint16(y))))
 			itemIdx := int(win.LOWORD(uint32(res)))
-			isOutside := win.HIWORD(uint32(res)) != 0
-
-			if !isOutside && itemIdx >= 0 {
+			if win.HIWORD(uint32(res)) == 0 && itemIdx >= 0 {
 				time.AfterFunc(10*time.Millisecond, func() {
-					mw.Synchronize(func() {
-						mw.lbPacks.SetSelectedIndexes([]int{itemIdx})
-					})
+					mw.Synchronize(func() { mw.lbPacks.SetSelectedIndexes([]int{itemIdx}) })
 				})
 			}
 		}
 	})
 
-	mw.lbPacks.SelectedIndexesChanged().Attach(func() {
-		// Summary or auto-update logic could go here
-	})
-
 	mw.Run()
 }
 
+// --- Logic & Event Handlers ---
+
+func (mw *ModBuilderWindow) prepareAction() {
+	if mw.cbOptionAutoClear.Checked() {
+		mw.teLog.SetText("")
+	}
+	mw.commitPathsToHistory()
+}
+
 func (mw *ModBuilderWindow) executeSequence() {
+	mw.prepareAction()
 	mw.builder.Parallel = mw.cbOptionParallel.Checked()
 
 	if mw.cbSequenceSnapshot.Checked() {
 		// To ensure a truly pristine snapshot, we uninstall the active mod FIRST.
 		mw.builder.Uninstall(mw.cmExe.Text())
-		gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
-		if err := mw.builder.RefreshBaseline(gameDir); err != nil {
-			mw.log(fmt.Sprintf("Snapshot error: %v", err))
-		} else {
-			mw.log("Vanilla Baseline Snapshot updated (Pristine).")
-		}
+		mw.runSnapshot()
 	}
-
 	if mw.cbSequenceChangeLog.Checked() {
 		mw.runMakeChangeLog()
 	}
@@ -223,6 +359,15 @@ func (mw *ModBuilderWindow) executeSequence() {
 	}
 	if mw.cbSequenceUninstall.Checked() {
 		mw.runUninstall()
+	}
+}
+
+func (mw *ModBuilderWindow) runSnapshot() {
+	gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
+	if err := mw.builder.RefreshBaseline(gameDir); err != nil {
+		mw.log(fmt.Sprintf("Error taking snapshot: %v", err))
+	} else {
+		mw.log("Vanilla Baseline Snapshot created successfully!")
 	}
 }
 
@@ -280,17 +425,13 @@ func (mw *ModBuilderWindow) runInstall() {
 		return
 	}
 
-	// Language Filtering Logic:
-	// If multiple language packs are selected, we only want to install the LAST one
-	// to avoid "File Clutter" crashing the game.
+	// Language Filtering Logic
 	finalPacksToInstall := []BundlePack{}
 	var lastLangPack *BundlePack
 
-	// First, find all selected packs
 	allSelectedPacks := []BundlePack{}
 	for _, idx := range indices {
-		pack := mw.packs.Bundles.Packs[idx]
-		allSelectedPacks = append(allSelectedPacks, pack)
+		allSelectedPacks = append(allSelectedPacks, mw.packs.Bundles.Packs[idx])
 	}
 
 	// Identify the last language pack
@@ -301,7 +442,6 @@ func (mw *ModBuilderWindow) runInstall() {
 		}
 	}
 
-	// Filter the final list
 	for _, pack := range allSelectedPacks {
 		if pack.SetGameLanguageOnInstall != "" {
 			if lastLangPack != nil && pack.Name == lastLangPack.Name {
@@ -331,9 +471,6 @@ func (mw *ModBuilderWindow) runInstall() {
 
 func (mw *ModBuilderWindow) runUninstall() {
 	exeName := mw.cmExe.Text()
-	if exeName == "" {
-		exeName = "generals.exe"
-	}
 	if err := mw.builder.Uninstall(exeName); err != nil {
 		mw.log(fmt.Sprintf("Error during uninstall: %v", err))
 	} else {
@@ -352,39 +489,288 @@ func (mw *ModBuilderWindow) runClean() {
 
 func (mw *ModBuilderWindow) runGame() {
 	exeName := mw.cmExe.Text()
+	args := mw.leLaunchArgs.Text()
 	if exeName == "" {
 		exeName = "generalszh.exe"
 	}
-
 	mw.log(fmt.Sprintf("Launching %s...", exeName))
 
-	if err := mw.builder.RunGame("_absInstallDir", exeName, ""); err != nil {
+	if err := mw.builder.RunGame("_absInstallDir", exeName, "", args); err != nil {
 		mw.log(fmt.Sprintf("Failed to launch game: %v", err))
 	}
 }
 
 func (mw *ModBuilderWindow) runMakeChangeLog() {
-	mw.log("Running Make Change Log...")
+	mw.log("Generating Changelog...")
 	if err := mw.builder.MakeChangeLog(); err != nil {
-		mw.log(fmt.Sprintf("Make Change Log failed: %v", err))
+		mw.log(fmt.Sprintf("Changelog generation failed: %v", err))
+	} else {
+		mw.log("Changelog generated successfully.")
 	}
 }
 
+func (mw *ModBuilderWindow) runAbort() {
+	mw.log("Abort signaled (Background cancellation currently unhandled).")
+}
+
 func (mw *ModBuilderWindow) log(msg string) {
-	mw.Synchronize(func() {
-		mw.teLog.AppendText(msg + "\r\n")
-	})
+	if mw.logChan != nil {
+		mw.logChan <- msg
+	} else {
+		fmt.Println(msg)
+	}
+}
+
+// --- Path Management ---
+
+func shortenPath(p string) string {
+	p = filepath.Clean(p)
+	if len(p) <= 45 {
+		return p
+	}
+	parts := strings.Split(filepath.ToSlash(p), "/")
+	if len(parts) < 3 {
+		return p[:20] + "..." + p[len(p)-20:]
+	}
+	return parts[0] + "/.../" + parts[len(parts)-2] + "/" + parts[len(parts)-1]
+}
+
+func addUniqueToHistory(history []string, path string) []string {
+	if path == "" || path == "... (Browse)" {
+		return history
+	}
+	path = filepath.Clean(filepath.FromSlash(path))
+	res := []string{path}
+	for _, p := range history {
+		if !strings.EqualFold(p, path) {
+			res = append(res, p)
+		}
+	}
+	if len(res) > 10 {
+		res = res[:10]
+	}
+	return res
+}
+
+func (mw *ModBuilderWindow) commitPathsToHistory() {
+	pDir := mw.cmProjectDir.Text()
+	pChanged := false
+	if pDir != "" && pDir != "... (Browse)" && !strings.EqualFold(pDir, mw.builder.ProjectDir) {
+		mw.projectHistory = addUniqueToHistory(mw.projectHistory, pDir)
+		mw.builder.SetProjectDir(mw.projectHistory[0])
+		pChanged = true
+	}
+
+	gDir := mw.cmGameDir.Text()
+	gChanged := false
+	if gDir != "" && gDir != "... (Browse)" && !strings.EqualFold(gDir, mw.builder.CustomGameDir) {
+		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, gDir)
+		mw.builder.CustomGameDir = mw.gameDirHistory[0]
+		gChanged = true
+	}
+
+	if pChanged || gChanged {
+		mw.updatingUI = true
+
+		// Preserve user's selection
+		var oldSelections []int
+		if mw.lbPacks != nil {
+			oldSelections = mw.lbPacks.SelectedIndexes()
+		}
+
+		if pChanged {
+			mw.reDiscover()
+		} else {
+			mw.refreshGameDirModel()
+			mw.updateExeList(mw.builder.CustomGameDir)
+		}
+
+		// Carefully restore selected UI indexes post-update
+		if len(oldSelections) > 0 && mw.lbPacks != nil && mw.packModel != nil {
+			validSelections := []int{}
+			for _, idx := range oldSelections {
+				if idx < len(mw.packModel) {
+					validSelections = append(validSelections, idx)
+				}
+			}
+			if len(validSelections) > 0 {
+				mw.lbPacks.SetSelectedIndexes(validSelections)
+			}
+		}
+
+		mw.updatingUI = false
+		mw.saveSettings()
+	}
+}
+
+func (mw *ModBuilderWindow) refreshProjectModel() {
+	mw.projectModel = make([]string, len(mw.projectHistory))
+	for i, p := range mw.projectHistory {
+		mw.projectModel[i] = p // Display exactly as saved (absolute path)
+	}
+	mw.projectModel = append(mw.projectModel, "... (Browse)")
+	if mw.cmProjectDir != nil {
+		mw.cmProjectDir.SetModel(mw.projectModel)
+		if len(mw.projectHistory) > 0 {
+			mw.cmProjectDir.SetCurrentIndex(0)
+		}
+	}
+}
+
+func (mw *ModBuilderWindow) refreshGameDirModel() {
+	mw.gameDirModel = make([]string, len(mw.gameDirHistory))
+	for i, p := range mw.gameDirHistory {
+		mw.gameDirModel[i] = p // Display exactly as saved (absolute path)
+	}
+	mw.gameDirModel = append(mw.gameDirModel, "... (Browse)")
+	if mw.cmGameDir != nil {
+		mw.cmGameDir.SetModel(mw.gameDirModel)
+		if len(mw.gameDirHistory) > 0 {
+			mw.cmGameDir.SetCurrentIndex(0)
+		}
+	}
+}
+
+func (mw *ModBuilderWindow) onProjectDirChanged() {
+	if mw.updatingUI {
+		return
+	}
+	idx := mw.cmProjectDir.CurrentIndex()
+	if idx == len(mw.projectModel)-1 || mw.cmProjectDir.Text() == "... (Browse)" {
+		mw.selectProjectDir()
+		return
+	}
+	if idx >= 0 && idx < len(mw.projectHistory) {
+		selected := mw.projectHistory[idx]
+		mw.projectHistory = addUniqueToHistory(mw.projectHistory, selected)
+		mw.builder.SetProjectDir(selected)
+		mw.updatingUI = true
+		mw.refreshProjectModel()
+		mw.updatingUI = false
+		mw.reDiscover()
+		mw.saveSettings()
+	}
+}
+
+func (mw *ModBuilderWindow) onGameDirChanged() {
+	if mw.updatingUI {
+		return
+	}
+	idx := mw.cmGameDir.CurrentIndex()
+	if idx == len(mw.gameDirModel)-1 || mw.cmGameDir.Text() == "... (Browse)" {
+		mw.selectGameDir()
+		return
+	}
+	if idx >= 0 && idx < len(mw.gameDirHistory) {
+		selected := mw.gameDirHistory[idx]
+		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, selected)
+		mw.builder.CustomGameDir = selected
+		mw.builder.LoadBaseline() // Reload baseline for new game dir
+		mw.updatingUI = true
+		mw.refreshGameDirModel()
+		mw.updateExeList(selected)
+		mw.updatingUI = false
+		mw.saveSettings()
+	}
+}
+
+func (mw *ModBuilderWindow) updateExeList(dir string) {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		mw.log(fmt.Sprintf("Error scanning directory for executables: %v", err))
+		return
+	}
+	var exes []string
+	for _, f := range files {
+		if !f.IsDir() && strings.HasSuffix(strings.ToLower(f.Name()), ".exe") {
+			exes = append(exes, f.Name())
+		}
+	}
+	if len(exes) == 0 {
+		exes = []string{"generalszh.exe", "generals.exe"}
+	}
+
+	mw.exeModel = exes
+	if mw.cmExe != nil {
+		current := mw.cmExe.Text()
+		mw.cmExe.SetModel(mw.exeModel)
+		// Try to keep previous selection
+		idx := -1
+		for i, name := range exes {
+			if strings.EqualFold(name, current) {
+				idx = i
+				break
+			}
+		}
+		if idx >= 0 {
+			mw.cmExe.SetCurrentIndex(idx)
+		} else if len(exes) > 0 {
+			mw.cmExe.SetCurrentIndex(0)
+		}
+	}
+}
+
+func (mw *ModBuilderWindow) selectGameDir() {
+	dlg := new(walk.FileDialog)
+	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
+		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, dlg.FilePath)
+		mw.builder.CustomGameDir = mw.gameDirHistory[0]
+		mw.updatingUI = true
+		mw.refreshGameDirModel()
+		mw.updateExeList(mw.builder.CustomGameDir)
+		mw.updatingUI = false
+		mw.saveSettings()
+	} else {
+		// Reset to previous top if cancelled to remove "..." from the visual box
+		mw.updatingUI = true
+		if len(mw.gameDirHistory) > 0 && mw.cmGameDir != nil {
+			mw.cmGameDir.SetCurrentIndex(0)
+		}
+		mw.updatingUI = false
+	}
 }
 
 func (mw *ModBuilderWindow) selectProjectDir() {
 	dlg := new(walk.FileDialog)
-	dlg.Title = "Select Mod Project Directory"
-
 	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
-		mw.leProjectDir.SetText(dlg.FilePath)
-		mw.builder.ProjectDir = dlg.FilePath
+		mw.projectHistory = addUniqueToHistory(mw.projectHistory, dlg.FilePath)
+		mw.builder.SetProjectDir(mw.projectHistory[0])
+		mw.updatingUI = true
+		mw.refreshProjectModel()
+		mw.updatingUI = false
 		mw.reDiscover()
+		mw.saveSettings()
+	} else {
+		// Reset to previous top if cancelled to remove "..." from the visual box
+		mw.updatingUI = true
+		if len(mw.projectHistory) > 0 && mw.cmProjectDir != nil {
+			mw.cmProjectDir.SetCurrentIndex(0)
+		}
+		mw.updatingUI = false
 	}
+}
+
+func (mw *ModBuilderWindow) saveSettings() {
+	if mw.cmExe == nil || mw.leLaunchArgs == nil || mw.cmProjectDir == nil || mw.cmGameDir == nil {
+		return
+	}
+	settings := &AppSettings{
+		CustomGameDir:  mw.builder.CustomGameDir,
+		SelectedExe:    mw.cmExe.Text(),
+		LaunchArgs:     mw.leLaunchArgs.Text(),
+		ProjectHistory: mw.projectHistory,
+		GameDirHistory: mw.gameDirHistory,
+	}
+	// Save App Settings (Global config should be in the App Root, not the project folder)
+	exePath, err := os.Executable()
+	var cwd string
+	if err == nil {
+		cwd = filepath.Dir(exePath)
+	} else {
+		cwd, _ = os.Getwd()
+	}
+	settingsPath := filepath.Join(cwd, "ModBuilderSettings.json")
+	SaveAppSettings(settingsPath, settings)
 }
 
 func (mw *ModBuilderWindow) reDiscover() {
@@ -401,18 +787,25 @@ func (mw *ModBuilderWindow) reDiscover() {
 	mw.builder.ItemsConfig = items
 	mw.builder.PacksConfig = packs
 
-	mw.model = make([]string, len(packs.Bundles.Packs))
+	mw.packModel = make([]string, len(packs.Bundles.Packs))
 	for i, p := range packs.Bundles.Packs {
-		mw.model[i] = p.Name
+		mw.packModel[i] = p.Name
 	}
-	mw.lbPacks.SetModel(mw.model)
-	mw.lbPacks.SetSelectedIndexes([]int{})
 
-	mw.log(fmt.Sprintf("Discovery complete: %d items, %d packs found in %s", len(items.Bundles.Items), len(packs.Bundles.Packs), configDir))
+	if mw.lbPacks != nil {
+		mw.lbPacks.SetModel(mw.packModel)
+		// Selection is now handled dynamically in commitPathsToHistory
+		// so it will no longer arbitrarily clear
+	}
+
+	mw.refreshProjectModel()
+	mw.refreshGameDirModel()
+	mw.updateExeList(mw.builder.CustomGameDir)
+
+	mw.log(fmt.Sprintf("Discovery complete: %d items, %d packs in %s", len(items.Bundles.Items), len(packs.Bundles.Packs), configDir))
 }
 
 func (mw *ModBuilderWindow) getAppIcon() interface{} {
-	// 1. Try to load from embedded PNG (Highest reliability & easiest fix)
 	if len(IconPNG) > 0 {
 		img, _, err := image.Decode(bytes.NewReader(IconPNG))
 		if err == nil {
@@ -421,19 +814,5 @@ func (mw *ModBuilderWindow) getAppIcon() interface{} {
 			}
 		}
 	}
-
-	// 2. Try local file in internal/bin/icon.ico (Dev or setup)
-	iconFile := filepath.Join("internal", "bin", "icon.ico")
-	if _, err := os.Stat(iconFile); err == nil {
-		return iconFile
-	}
-
-	// 3. Try embedded resource IDs (Standard for rsrc icons as fallback)
-	for _, id := range []int{7, 3, 1} {
-		if icon, err := walk.NewIconFromResourceId(id); err == nil {
-			return icon
-		}
-	}
-
 	return nil
 }
