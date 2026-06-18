@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	_ "image/png"
+	"image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -318,10 +318,6 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 		}
 	})
 
-	mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
-		close(mw.logChan)
-	})
-
 	mw.Run()
 }
 
@@ -609,7 +605,9 @@ func (mw *ModBuilderWindow) commitPathsToHistory() {
 
 func (mw *ModBuilderWindow) refreshProjectModel() {
 	mw.projectModel = make([]string, len(mw.projectHistory))
-	copy(mw.projectModel, mw.projectHistory)
+	for i, p := range mw.projectHistory {
+		mw.projectModel[i] = p // Display exactly as saved (absolute path)
+	}
 	mw.projectModel = append(mw.projectModel, "... (Browse)")
 	if mw.cmProjectDir != nil {
 		mw.cmProjectDir.SetModel(mw.projectModel)
@@ -621,7 +619,9 @@ func (mw *ModBuilderWindow) refreshProjectModel() {
 
 func (mw *ModBuilderWindow) refreshGameDirModel() {
 	mw.gameDirModel = make([]string, len(mw.gameDirHistory))
-	copy(mw.gameDirModel, mw.gameDirHistory)
+	for i, p := range mw.gameDirHistory {
+		mw.gameDirModel[i] = p // Display exactly as saved (absolute path)
+	}
 	mw.gameDirModel = append(mw.gameDirModel, "... (Browse)")
 	if mw.cmGameDir != nil {
 		mw.cmGameDir.SetModel(mw.gameDirModel)
@@ -629,22 +629,6 @@ func (mw *ModBuilderWindow) refreshGameDirModel() {
 			mw.cmGameDir.SetCurrentIndex(0)
 		}
 	}
-}
-
-func (mw *ModBuilderWindow) applyProjectDir(dir string) {
-	if dir == "" {
-		return
-	}
-
-	mw.projectHistory = addUniqueToHistory(mw.projectHistory, dir)
-	mw.builder.SetProjectDir(mw.projectHistory[0])
-
-	mw.updatingUI = true
-	mw.refreshProjectModel()
-	mw.updatingUI = false
-
-	mw.reDiscover()
-	mw.saveSettings()
 }
 
 func (mw *ModBuilderWindow) onProjectDirChanged() {
@@ -657,27 +641,15 @@ func (mw *ModBuilderWindow) onProjectDirChanged() {
 		return
 	}
 	if idx >= 0 && idx < len(mw.projectHistory) {
-		mw.applyProjectDir(mw.projectHistory[idx])
+		selected := mw.projectHistory[idx]
+		mw.projectHistory = addUniqueToHistory(mw.projectHistory, selected)
+		mw.builder.SetProjectDir(selected)
+		mw.updatingUI = true
+		mw.refreshProjectModel()
+		mw.updatingUI = false
+		mw.reDiscover()
+		mw.saveSettings()
 	}
-}
-
-func (mw *ModBuilderWindow) applyGameDir(dir string) {
-	if dir == "" {
-		return
-	}
-
-	mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, dir)
-	mw.builder.CustomGameDir = mw.gameDirHistory[0]
-
-	// Load the baseline snapshot for this folder
-	mw.builder.LoadBaseline()
-
-	mw.updatingUI = true
-	mw.refreshGameDirModel()
-	mw.updateExeList(mw.builder.CustomGameDir)
-	mw.updatingUI = false
-
-	mw.saveSettings()
 }
 
 func (mw *ModBuilderWindow) onGameDirChanged() {
@@ -690,7 +662,15 @@ func (mw *ModBuilderWindow) onGameDirChanged() {
 		return
 	}
 	if idx >= 0 && idx < len(mw.gameDirHistory) {
-		mw.applyGameDir(mw.gameDirHistory[idx])
+		selected := mw.gameDirHistory[idx]
+		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, selected)
+		mw.builder.CustomGameDir = selected
+		mw.builder.LoadBaseline() // Reload baseline for new game dir
+		mw.updatingUI = true
+		mw.refreshGameDirModel()
+		mw.updateExeList(selected)
+		mw.updatingUI = false
+		mw.saveSettings()
 	}
 }
 
@@ -702,8 +682,7 @@ func (mw *ModBuilderWindow) updateExeList(dir string) {
 	}
 	var exes []string
 	for _, f := range files {
-		name := strings.ToLower(f.Name())
-		if !f.IsDir() && strings.HasSuffix(name, ".exe") && strings.HasPrefix(name, "generals") {
+		if !f.IsDir() && strings.HasSuffix(strings.ToLower(f.Name()), ".exe") {
 			exes = append(exes, f.Name())
 		}
 	}
@@ -734,7 +713,13 @@ func (mw *ModBuilderWindow) updateExeList(dir string) {
 func (mw *ModBuilderWindow) selectGameDir() {
 	dlg := new(walk.FileDialog)
 	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
-		mw.applyGameDir(dlg.FilePath)
+		mw.gameDirHistory = addUniqueToHistory(mw.gameDirHistory, dlg.FilePath)
+		mw.builder.CustomGameDir = mw.gameDirHistory[0]
+		mw.updatingUI = true
+		mw.refreshGameDirModel()
+		mw.updateExeList(mw.builder.CustomGameDir)
+		mw.updatingUI = false
+		mw.saveSettings()
 	} else {
 		// Reset to previous top if cancelled to remove "..." from the visual box
 		mw.updatingUI = true
@@ -748,7 +733,13 @@ func (mw *ModBuilderWindow) selectGameDir() {
 func (mw *ModBuilderWindow) selectProjectDir() {
 	dlg := new(walk.FileDialog)
 	if ok, _ := dlg.ShowBrowseFolder(mw); ok {
-		mw.applyProjectDir(dlg.FilePath)
+		mw.projectHistory = addUniqueToHistory(mw.projectHistory, dlg.FilePath)
+		mw.builder.SetProjectDir(mw.projectHistory[0])
+		mw.updatingUI = true
+		mw.refreshProjectModel()
+		mw.updatingUI = false
+		mw.reDiscover()
+		mw.saveSettings()
 	} else {
 		// Reset to previous top if cancelled to remove "..." from the visual box
 		mw.updatingUI = true
