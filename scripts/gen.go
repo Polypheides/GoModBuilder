@@ -3,15 +3,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"encoding/binary"
-	"net/http"
-	"io"
-	"crypto/sha256"
-	"encoding/hex"
 )
 
 type ToolRunner struct {
@@ -33,7 +33,7 @@ func (tr *ToolRunner) log(format string, a ...interface{}) {
 func (tr *ToolRunner) DownloadFileWithVerify(url, target, expectedHash string) error {
 	tr.log("Downloading %s...", url)
 	os.MkdirAll(filepath.Dir(target), 0755)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
@@ -100,7 +100,7 @@ var DefaultTools = map[string]struct {
 
 func main() {
 	fmt.Println("--- Generals Mod Builder Automation ---")
-	
+
 	projectDir, _ := os.Getwd()
 	binDir := filepath.Join(projectDir, "internal", "bin")
 	os.MkdirAll(binDir, 0755)
@@ -123,22 +123,9 @@ func main() {
 		fmt.Printf(" [!!] Icon setup failed: %v. GUI will use default icon.\n", err)
 	}
 
-	fmt.Println("Vevifying/Downloading tools...")
+	fmt.Println("Verifying/Downloading tools...")
 	for name, info := range DefaultTools {
 		path := filepath.Join(binDir, name)
-
-		// Special case for gametextcompiler: try building from source
-		if name == "gametextcompiler.exe" {
-			if _, err := os.Stat(path); err != nil {
-				fmt.Println(" [..] gametextcompiler.exe missing. Building from source...")
-				if err := buildGameTextCompiler(projectDir, binDir); err == nil {
-					fmt.Printf(" [OK] %s built from source.\n", name)
-					continue
-				} else {
-					fmt.Printf(" [!!] Failed to build from source: %v. Falling back to download.\n", err)
-				}
-			}
-		}
 
 		// Special case for gametextcompiler: try building from source
 		if name == "gametextcompiler.exe" {
@@ -205,7 +192,7 @@ func buildGameTextCompiler(projectDir, binDir string) error {
 
 	tempBuildDir := filepath.Join(projectDir, ".tools", "build_gtc")
 	os.MkdirAll(tempBuildDir, 0755)
-	
+
 	// Create a mock gitverinfo.c and config.h for baseconfig
 	os.MkdirAll(filepath.Join(tempBuildDir, "src"), 0755)
 	os.WriteFile(filepath.Join(tempBuildDir, "src", "gitverinfo.c"), []byte(`
@@ -501,7 +488,7 @@ func ensureIcons(binDir string) error {
 
 	fmt.Println(" [..] Downloading original icon from GitHub...")
 	const iconURL = "https://raw.githubusercontent.com/TheSuperHackers/GeneralsModBuilder/main/ModBuilder/generalsmodbuilder/gui/icon.png"
-	
+
 	resp, err := http.Get(iconURL)
 	if err != nil {
 		return fmt.Errorf("failed to download icon: %v", err)
