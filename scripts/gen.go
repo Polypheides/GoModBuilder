@@ -261,6 +261,13 @@ AudioManager *g_theAudio = nullptr;
 DynamicMemoryAllocator *g_dynamicMemoryAllocator = (DynamicMemoryAllocator*)malloc(sizeof(DynamicMemoryAllocator));
 SimpleCriticalSectionClass *g_dmaCriticalSection = nullptr;
 
+// Global helper
+void Init_Subsystem(SubsystemInterface *&ptr, const char *name, SubsystemInterface *inst) { ptr = inst; }
+
+namespace Thyme {
+    int Encode_Buffered_File_Mode(int mode, int buffer_size) { return mode; }
+}
+
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
 extern "C" HWND g_applicationHWnd = NULL;
@@ -316,15 +323,6 @@ void SubsystemInterfaceList::Reset_All() {}
 void SubsystemInterfaceList::Shutdown_All() {}
 void SubsystemInterfaceList::Add_Subsystem(SubsystemInterface *) {}
 void SubsystemInterfaceList::Remove_Subsystem(SubsystemInterface *) {}
-
-// Global helper
-void Init_Subsystem(SubsystemInterface *&ptr, const char *name, SubsystemInterface *inst) { ptr = inst; }
-
-namespace Thyme {
-    int Encode_Buffered_File_Mode(int mode, int buffer_size) { return mode; }
-    bool Name_To_Language(const char *name, LanguageID &lang) { return false; }
-    const char *Get_Language_Name(LanguageID language) { return "Unknown"; }
-}
 
 // File base methods
 File::~File() {}
@@ -424,6 +422,7 @@ add_executable(gametextcompiler
 
     # Engine Core (Minimal)
     "${THYME_ROOT}/src/game/client/gametextfile.cpp"
+    "${THYME_ROOT}/src/game/client/gametextcommon.cpp"
     "${THYME_ROOT}/src/game/common/system/asciistring.cpp"
     "${THYME_ROOT}/src/game/common/system/unicodestring.cpp"
     "${THYME_ROOT}/src/w3d/lib/wwstring.cpp"

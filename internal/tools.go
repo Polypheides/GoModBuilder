@@ -28,7 +28,7 @@ var DefaultTools = map[string]struct {
 	},
 	"gametextcompiler.exe": {
 		URL:  "https://github.com/Polypheides/GoModBuilder/raw/tools-bin/gametextcompiler.exe",
-		Hash: "46b4f0d24de9324d7430aa778cf92f8757542f50bb7d21f0ea5d4e4a588b2b33",
+		Hash: "7fbe07094569cfda923bf319d9fa97bb41ddc7cee6f2b938447d0238e7b18951",
 	},
 	"generalsbigcreator.exe": {
 		URL:  "https://github.com/TheSuperHackers/GeneralsTools/raw/main/Tools/generalsbigcreator/v1.3/generalsbigcreator.exe",
