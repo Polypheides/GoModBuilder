@@ -10,3 +10,7 @@ _absReleaseDir/
 .thyme/
 internal/bin/*
 !internal/bin/.gitkeep
+
+# Settings and Resources
+ModBuilderSettings.json
+*.syso

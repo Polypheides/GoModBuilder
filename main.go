@@ -55,10 +55,11 @@ func main() {
 		fmt.Println("Starting setup process...")
 		binDir := filepath.Join(projectDir, "internal", "bin") // Match builder's expected tools path
 		tr := internal.NewToolRunner(binDir, projectDir, func(s string) { fmt.Println(s) })
-		for name, info := range internal.DefaultTools {
-			path := filepath.Join(binDir, name)
-			if err := tr.DownloadFileWithVerify(info.URL, path, info.Hash); err != nil {
+		for name := range internal.DefaultTools {
+			if _, err := tr.GetToolPath(name); err != nil {
 				fmt.Printf(" Failed to setup %s: %v\n", name, err)
+			} else {
+				fmt.Printf(" Tool %s setup successfully.\n", name)
 			}
 		}
 		fmt.Println("Setup completed.")
