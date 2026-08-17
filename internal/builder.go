@@ -480,7 +480,7 @@ func (b *ModBuilder) Uninstall(exeName string) error {
 	return nil
 }
 
-func (b *ModBuilder) BuildAll(packFilter string) error {
+func (b *ModBuilder) BuildAll(packFilters ...string) error {
 	buildStart := time.Now()
 	defer func() {
 		b.log("Build finished in %v", time.Since(buildStart).Round(time.Millisecond))
@@ -491,13 +491,25 @@ func (b *ModBuilder) BuildAll(packFilter string) error {
 	os.MkdirAll(b.BuildDir, 0755)
 	os.MkdirAll(b.ReleaseDir, 0755)
 
+	match := func(name string) bool {
+		if len(packFilters) == 0 {
+			return true
+		}
+		for _, f := range packFilters {
+			if f == "" || f == name {
+				return true
+			}
+		}
+		return false
+	}
+
 	if b.Parallel {
 		var wg sync.WaitGroup
 		var errOnce sync.Once
 		var buildErr error
 
 		for _, pack := range b.PacksConfig.Bundles.Packs {
-			if packFilter != "" && pack.Name != packFilter {
+			if !match(pack.Name) {
 				continue
 			}
 			wg.Add(1)
@@ -513,7 +525,7 @@ func (b *ModBuilder) BuildAll(packFilter string) error {
 		return buildErr
 	} else {
 		for _, pack := range b.PacksConfig.Bundles.Packs {
-			if packFilter != "" && pack.Name != packFilter {
+			if !match(pack.Name) {
 				continue
 			}
 			b.log("Building pack: %s", pack.Name)
@@ -526,12 +538,24 @@ func (b *ModBuilder) BuildAll(packFilter string) error {
 	return nil
 }
 
-func (b *ModBuilder) BuildRelease(packFilter string) error {
+func (b *ModBuilder) BuildRelease(packFilters ...string) error {
 	b.log("Starting release process...")
 	os.MkdirAll(b.ReleaseDir, 0755)
 
+	match := func(name string) bool {
+		if len(packFilters) == 0 {
+			return true
+		}
+		for _, f := range packFilters {
+			if f == "" || f == name {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, pack := range b.PacksConfig.Bundles.Packs {
-		if packFilter != "" && pack.Name != packFilter {
+		if !match(pack.Name) {
 			continue
 		}
 		b.log("Packaging pack for release: %s", pack.Name)
