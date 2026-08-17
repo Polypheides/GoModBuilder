@@ -27,8 +27,8 @@ var DefaultTools = map[string]struct {
 		Hash: "8ae949bfc3e3e4a1717dca8845ce8ed480638de68cbf1d7cbe912e99e35ce06f",
 	},
 	"gametextcompiler.exe": {
-		URL:  "https://github.com/TheSuperHackers/GeneralsTools/raw/main/Tools/gametextcompiler/v1.1/gametextcompiler.exe",
-		Hash: "9c4c50f9c4829caff9b913bdd1a398a3a323ae9a1599723ff71ac675f6087467",
+		URL:  "https://github.com/Polypheides/GoModBuilder/raw/tools-bin/gametextcompiler.exe",
+		Hash: "7fbe07094569cfda923bf319d9fa97bb41ddc7cee6f2b938447d0238e7b18951",
 	},
 	"generalsbigcreator.exe": {
 		URL:  "https://github.com/TheSuperHackers/GeneralsTools/raw/main/Tools/generalsbigcreator/v1.3/generalsbigcreator.exe",
@@ -74,7 +74,7 @@ func (tr *ToolRunner) run(cmdPath string, args ...string) error {
 }
 
 func (tr *ToolRunner) RunBigCreator(args ...string) error {
-	path, err := tr.getToolPath("generalsbigcreator.exe")
+	path, err := tr.GetToolPath("generalsbigcreator.exe")
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func (tr *ToolRunner) RunBigCreator(args ...string) error {
 }
 
 func (tr *ToolRunner) RunGameTextCompiler(args ...string) error {
-	path, err := tr.getToolPath("gametextcompiler.exe")
+	path, err := tr.GetToolPath("gametextcompiler.exe")
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (tr *ToolRunner) RunGameTextCompiler(args ...string) error {
 }
 
 func (tr *ToolRunner) RunCrunch(args ...string) error {
-	path, err := tr.getToolPath("crunch_x64.exe")
+	path, err := tr.GetToolPath("crunch_x64.exe")
 	if err != nil {
 		return err
 	}
@@ -99,20 +99,29 @@ func (tr *ToolRunner) RunCrunch(args ...string) error {
 
 func (tr *ToolRunner) Run7z(args ...string) error {
 	// Ensure DLL is present first
-	if _, err := tr.getToolPath("7z.dll"); err != nil {
+	if _, err := tr.GetToolPath("7z.dll"); err != nil {
 		return err
 	}
-	path, err := tr.getToolPath("7z.exe")
+	path, err := tr.GetToolPath("7z.exe")
 	if err != nil {
 		return err
 	}
 	return tr.run(path, args...)
 }
 
-func (tr *ToolRunner) getToolPath(toolName string) (string, error) {
+func (tr *ToolRunner) GetToolPath(toolName string) (string, error) {
 	path := filepath.Join(tr.ToolsDir, toolName)
 	if _, err := os.Stat(path); err == nil {
-		return path, nil
+		if info, ok := DefaultTools[toolName]; ok && info.Hash != "" {
+			if tr.VerifyHash(path, info.Hash) {
+				tr.log("Tool %s already exists and hash verified.", toolName)
+				return path, nil
+			}
+			tr.log("WARNING: Tool %s exists but hash mismatch! Removing...", toolName)
+			os.Remove(path)
+		} else {
+			return path, nil
+		}
 	}
 
 	tr.log("Tool %s missing, attempting to extract from binary...", toolName)
@@ -156,6 +165,7 @@ func (tr *ToolRunner) DownloadFileWithVerify(url, target, expectedHash string) e
 
 	if expectedHash != "" {
 		if !tr.VerifyHash(target, expectedHash) {
+			os.Remove(target)
 			return fmt.Errorf("hash verification failed for %s", target)
 		}
 	}

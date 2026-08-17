@@ -81,8 +81,8 @@ var DefaultTools = map[string]struct {
 		Hash: "8ae949bfc3e3e4a1717dca8845ce8ed480638de68cbf1d7cbe912e99e35ce06f",
 	},
 	"gametextcompiler.exe": {
-		URL:  "https://github.com/TheSuperHackers/GeneralsTools/raw/main/Tools/gametextcompiler/v1.1/gametextcompiler.exe",
-		Hash: "9c4c50f9c4829caff9b913bdd1a398a3a323ae9a1599723ff71ac675f6087467",
+		URL:  "https://github.com/Polypheides/GoModBuilder/raw/tools-bin/gametextcompiler.exe",
+		Hash: "46b4f0d24de9324d7430aa778cf92f8757542f50bb7d21f0ea5d4e4a588b2b33",
 	},
 	"generalsbigcreator.exe": {
 		URL:  "https://github.com/TheSuperHackers/GeneralsTools/raw/main/Tools/generalsbigcreator/v1.3/generalsbigcreator.exe",
@@ -127,6 +127,16 @@ func main() {
 	for name, info := range DefaultTools {
 		path := filepath.Join(binDir, name)
 
+		if _, err := os.Stat(path); err == nil {
+			if !tr.VerifyHash(path, info.Hash) {
+				fmt.Printf(" [..] %s hash mismatch, removing...\n", name)
+				os.Remove(path)
+			} else {
+				fmt.Printf(" [OK] %s\n", name)
+				continue
+			}
+		}
+
 		// Special case for gametextcompiler: try building from source
 		if name == "gametextcompiler.exe" {
 			if _, err := os.Stat(path); err != nil {
@@ -140,12 +150,6 @@ func main() {
 			}
 		}
 
-		if _, err := os.Stat(path); err == nil {
-			if tr.VerifyHash(path, info.Hash) {
-				fmt.Printf(" [OK] %s\n", name)
-				continue
-			}
-		}
 		fmt.Printf(" [..] Downloading %s...\n", name)
 		if err := tr.DownloadFileWithVerify(info.URL, path, info.Hash); err != nil {
 			fmt.Printf(" [!!] Failed to download %s: %v\n", name, err)
@@ -257,6 +261,13 @@ AudioManager *g_theAudio = nullptr;
 DynamicMemoryAllocator *g_dynamicMemoryAllocator = (DynamicMemoryAllocator*)malloc(sizeof(DynamicMemoryAllocator));
 SimpleCriticalSectionClass *g_dmaCriticalSection = nullptr;
 
+// Global helper
+void Init_Subsystem(SubsystemInterface *&ptr, const char *name, SubsystemInterface *inst) { ptr = inst; }
+
+namespace Thyme {
+    int Encode_Buffered_File_Mode(int mode, int buffer_size) { return mode; }
+}
+
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
 extern "C" HWND g_applicationHWnd = NULL;
@@ -312,15 +323,6 @@ void SubsystemInterfaceList::Reset_All() {}
 void SubsystemInterfaceList::Shutdown_All() {}
 void SubsystemInterfaceList::Add_Subsystem(SubsystemInterface *) {}
 void SubsystemInterfaceList::Remove_Subsystem(SubsystemInterface *) {}
-
-// Global helper
-void Init_Subsystem(SubsystemInterface *&ptr, const char *name, SubsystemInterface *inst) { ptr = inst; }
-
-namespace Thyme {
-    int Encode_Buffered_File_Mode(int mode, int buffer_size) { return mode; }
-    bool Name_To_Language(const char *name, LanguageID &lang) { return false; }
-    const char *Get_Language_Name(LanguageID language) { return "Unknown"; }
-}
 
 // File base methods
 File::~File() {}
@@ -388,6 +390,7 @@ project(GameTextCompilerMinimal)
 set(THYME_ROOT "%[1]s")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /Brepro")
 
 add_definitions(-DSTANDALONE -DBUILD_TOOLS -DPLATFORM_WINDOWS -D_CRT_SECURE_NO_WARNINGS -DUNICODE -D_UNICODE -D__CURRENT_FUNCTION__=__FUNCSIG__ -DNOMINMAX)
 
@@ -419,6 +422,7 @@ add_executable(gametextcompiler
 
     # Engine Core (Minimal)
     "${THYME_ROOT}/src/game/client/gametextfile.cpp"
+    "${THYME_ROOT}/src/game/client/gametextcommon.cpp"
     "${THYME_ROOT}/src/game/common/system/asciistring.cpp"
     "${THYME_ROOT}/src/game/common/system/unicodestring.cpp"
     "${THYME_ROOT}/src/w3d/lib/wwstring.cpp"
