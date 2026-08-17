@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"GoModBuilder/internal/changelog"
 
@@ -480,6 +481,11 @@ func (b *ModBuilder) Uninstall(exeName string) error {
 }
 
 func (b *ModBuilder) BuildAll(packFilter string) error {
+	buildStart := time.Now()
+	defer func() {
+		b.log("Build finished in %v", time.Since(buildStart).Round(time.Millisecond))
+	}()
+
 	b.log("Starting build process...")
 
 	os.MkdirAll(b.BuildDir, 0755)
