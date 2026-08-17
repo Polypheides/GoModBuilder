@@ -382,14 +382,15 @@ func (mw *ModBuilderWindow) runBuild() {
 		mw.log("No packs selected.")
 		return
 	}
+	var selectedPacks []string
 	for _, idx := range indices {
-		packName := mw.packs.Bundles.Packs[idx].Name
-		mw.log(fmt.Sprintf("Building pack: %s", packName))
-		if err := mw.builder.BuildAll(packName); err != nil {
-			mw.log(fmt.Sprintf("Build failed for %s: %v", packName, err))
-		} else {
-			mw.log(fmt.Sprintf("Build completed for %s.", packName))
-		}
+		selectedPacks = append(selectedPacks, mw.packs.Bundles.Packs[idx].Name)
+	}
+
+	if err := mw.builder.BuildAll(selectedPacks...); err != nil {
+		mw.log(fmt.Sprintf("Build failed: %v", err))
+	} else {
+		mw.log("Build sequence completed.")
 	}
 }
 
@@ -400,14 +401,15 @@ func (mw *ModBuilderWindow) runBuildRelease() {
 		mw.log("No packs selected.")
 		return
 	}
+	var selectedPacks []string
 	for _, idx := range indices {
-		packName := mw.packs.Bundles.Packs[idx].Name
-		mw.log(fmt.Sprintf("Building release for pack: %s", packName))
-		if err := mw.builder.BuildRelease(packName); err != nil {
-			mw.log(fmt.Sprintf("Release build failed for %s: %v", packName, err))
-		} else {
-			mw.log(fmt.Sprintf("Release build completed for %s.", packName))
-		}
+		selectedPacks = append(selectedPacks, mw.packs.Bundles.Packs[idx].Name)
+	}
+
+	if err := mw.builder.BuildRelease(selectedPacks...); err != nil {
+		mw.log(fmt.Sprintf("Build Release failed: %v", err))
+	} else {
+		mw.log("Build Release sequence completed.")
 	}
 }
 
