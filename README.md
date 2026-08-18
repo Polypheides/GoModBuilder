@@ -4,11 +4,13 @@ A high-performance, unified Go-based mod building tool for Command & Conquer: Ge
 
 ## Features
 
-- **Windows GUI**: Native Windows interface built with the `walk` library.
+- **Windows GUI**: Native Windows interface built with the `walk` library, featuring thread-safe background processing and responsive design.
 - **Embedded Tools**: Support for standalone binaries with embedded tools and icons.
-- **Parallel Processing**: Concurrent build engine with a process semaphore to prevent system overload.
+- **Parallel Processing**: Concurrent build engine with a process semaphore to prevent system overload, featuring single-flight architecture to prevent duplicate asset compilation.
+- **Abort & Cancellation**: Graceful shutdown and cancellation of supported background tools and file-processing operations via `context.Context`.
+- **Unified Lifecycle Logging**: 1:1 logging parity between the terminal, disk log (`GoModBuilder.log`), and GUI output panel.
 - **Recursive Wildcards**: `**` globbing support that mirrors source directory structures.
-- **Texture Support**: Integrated **Crunch** (v1.04) for DDS (DXT1/DXT5) compression.
+- **Texture Support**: Integrated **Crunch** (v1.04) for DDS (DXT1/DXT5) compression with smart raw-copy fallbacks.
 - **Game Text Toolset**: CSF compilation/decompilation with automated language extraction.
 - **Text Filtering**: `excludeMarkersList` support for Core/Optional content logic.
 - **Installation Management**:
@@ -16,7 +18,9 @@ A high-performance, unified Go-based mod building tool for Command & Conquer: Ge
     - **Registry Integration**: Auto-discovery of game paths and registry-based language syncing.
     - **Safe-Backup**: Automatic creation and restoration of `.bak` files for vanilla assets.
 - **Release Packaging**: Integrated 7-Zip (`mx9`) zipping with automated MD5/SHA256 hash generation.
-- **Automation Hooks**: Python-based event hooks and automated changelog generation.
+- **Incremental Caching**: Blazing fast SHA-256-hash based cache that skips unchanged assets and avoids redundant external tool executions.
+- **Automation Hooks**: Python-based `OnPreBuild` / `OnPostBuild` event hooks (allows you to inject custom scripts without recompiling the Go builder).
+- **Changelog Generator**: 100% Native Go automated changelog generation.
 - **Setup Script**: `gen.go` script for verified tool acquisition and source-to-binary compilation.
 
 ## Getting Started
