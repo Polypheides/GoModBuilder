@@ -1,10 +1,7 @@
 package internal
 
 import (
-	"bytes"
 	"fmt"
-	"image"
-	_ "image/png"
 	"log"
 	"os"
 	"path/filepath"
@@ -110,7 +107,6 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 	if err := (declarative.MainWindow{
 		AssignTo: &mw.MainWindow,
 		Title:    "Go Mod Builder v1.1 by Polypheides",
-		Icon:     mw.getAppIcon(),
 		Size:     declarative.Size{Width: 950, Height: 550},
 		MinSize:  declarative.Size{Width: 850, Height: 450},
 		Font:     declarative.Font{Family: "Segoe UI", PointSize: 9},
@@ -814,16 +810,4 @@ func (mw *ModBuilderWindow) reDiscover() {
 	mw.updateExeList(mw.builder.CustomGameDir)
 
 	mw.log(fmt.Sprintf("Discovery complete: %d items, %d packs in %s", len(items.Bundles.Items), len(packs.Bundles.Packs), configDir))
-}
-
-func (mw *ModBuilderWindow) getAppIcon() interface{} {
-	if len(IconPNG) > 0 {
-		img, _, err := image.Decode(bytes.NewReader(IconPNG))
-		if err == nil {
-			if icon, err := walk.NewIconFromImage(img); err == nil {
-				return icon
-			}
-		}
-	}
-	return nil
 }

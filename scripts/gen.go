@@ -486,8 +486,16 @@ func ensureIcons(binDir string) error {
 	targetIco := filepath.Join(binDir, "icon.ico")
 	targetPng := filepath.Join(binDir, "icon.png")
 
-	if _, err := os.Stat(targetIco); err == nil {
-		return nil // Already present
+	var needsDownload bool
+	if info, err := os.Stat(targetPng); os.IsNotExist(err) || (err == nil && info.Size() == 0) {
+		needsDownload = true
+	}
+	if _, err := os.Stat(targetIco); os.IsNotExist(err) {
+		needsDownload = true
+	}
+
+	if !needsDownload {
+		return nil // Already present and valid
 	}
 
 	fmt.Println(" [..] Downloading original icon from GitHub...")
