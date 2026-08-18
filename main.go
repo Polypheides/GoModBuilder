@@ -3,6 +3,7 @@ package main
 //go:generate go run gen.go
 
 import (
+	"context"
 	"GoModBuilder/internal"
 	"flag"
 	"fmt"
@@ -54,7 +55,7 @@ func main() {
 	if *setupFlag {
 		fmt.Println("Starting setup process...")
 		binDir := filepath.Join(projectDir, "internal", "bin") // Match builder's expected tools path
-		tr := internal.NewToolRunner(binDir, projectDir, func(s string) { fmt.Println(s) })
+		tr := internal.NewToolRunner(context.Background(), binDir, projectDir, func(s string) { fmt.Println(s) })
 		for name := range internal.DefaultTools {
 			if _, err := tr.GetToolPath(name); err != nil {
 				fmt.Printf(" Failed to setup %s: %v\n", name, err)
