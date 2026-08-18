@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
@@ -71,6 +72,8 @@ type ModBuilder struct {
 	Parallel      bool
 	procSem       chan struct{} // Global semaphore for external processes
 	fileSem       chan struct{} // Semaphore for file I/O operations
+	Ctx           context.Context
+	CancelFunc    context.CancelFunc
 
 	// Baseline Management
 	BaselineFilenames map[string]bool
@@ -147,11 +150,18 @@ func (b *ModBuilder) SaveBaseline() error {
 	return os.WriteFile(baselinePath, data, 0644)
 }
 
-func (b *ModBuilder) RefreshBaseline(targetGameDir string) error {
+func (b *ModBuilder) RefreshBaseline(targetGameDir string) (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Snapshot failed: %v", err)
+		} else {
+			b.log("Snapshot completed successfully.")
+		}
+	}()
 	b.log("Taking recursive snapshot of ALL game files for Vanilla Baseline: %s", targetGameDir)
 	b.BaselineFilenames = make(map[string]bool)
 
-	err := filepath.Walk(targetGameDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(targetGameDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return filepath.SkipDir // If we can't access it, just skip it!
 		}
@@ -244,7 +254,14 @@ func (b *ModBuilder) log(format string, a ...interface{}) {
 	}
 }
 
-func (b *ModBuilder) CleanAll() error {
+func (b *ModBuilder) CleanAll() (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Clean failed: %v", err)
+		} else {
+			b.log("Clean completed successfully.")
+		}
+	}()
 	b.log("Cleaning build and release directories...")
 	os.RemoveAll(b.BuildDir)
 	os.RemoveAll(b.ReleaseDir)
@@ -259,7 +276,12 @@ func (b *ModBuilder) CleanAll() error {
 	return nil
 }
 
-func (b *ModBuilder) RunGame(gameDir, exeName, language, launchArgs string) error {
+func (b *ModBuilder) RunGame(gameDir, exeName, language, launchArgs string) (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Failed to launch game: %v", err)
+		}
+	}()
 	finalDir := b.GetGameDir(gameDir, exeName)
 	fullPath := filepath.Join(finalDir, exeName)
 
@@ -486,7 +508,14 @@ func (b *ModBuilder) FindGameInstallPath(exeName string) string {
 	return ""
 }
 
-func (b *ModBuilder) Uninstall(exeName string) error {
+func (b *ModBuilder) Uninstall(exeName string) (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Uninstall failed: %v", err)
+		} else {
+			b.log("Uninstall completed.")
+		}
+	}()
 	b.log("Starting uninstall process...")
 
 	state, err := b.LoadState()
@@ -552,10 +581,15 @@ func (b *ModBuilder) Uninstall(exeName string) error {
 	return nil
 }
 
-func (b *ModBuilder) BuildAll(packFilters ...string) error {
+func (b *ModBuilder) BuildAll(packFilters ...string) (err error) {
 	buildStart := time.Now()
 	defer func() {
-		b.log("Build finished in %v", time.Since(buildStart).Round(time.Millisecond))
+		dur := time.Since(buildStart).Round(time.Millisecond)
+		if err != nil {
+			b.log("Build failed: %v in %v", err, dur)
+		} else {
+			b.log("Build finished in %v", dur)
+		}
 	}()
 
 	b.log("Starting build process...")
@@ -612,6 +646,9 @@ func (b *ModBuilder) BuildAll(packFilters ...string) error {
 		for _, pack := range b.PacksConfig.Bundles.Packs {
 			if !match(pack.Name) {
 				continue
+			}
+			if b.Ctx != nil && b.Ctx.Err() != nil {
+				return b.Ctx.Err()
 			}
 			b.log("Building pack: %s", pack.Name)
 			if err := b.BuildPack(pack); err != nil {
@@ -677,7 +714,14 @@ func copyFileFallback(src, dst string) (err error) {
 	return err
 }
 
-func (b *ModBuilder) ZipRelease(packFilters ...string) error {
+func (b *ModBuilder) ZipRelease(packFilters ...string) (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Zip Release failed: %v", err)
+		} else {
+			b.log("Zip Release sequence completed.")
+		}
+	}()
 	b.log("Starting Zip Release sequence...")
 	os.MkdirAll(b.ReleaseDir, 0755)
 
@@ -704,7 +748,7 @@ func (b *ModBuilder) ZipRelease(packFilters ...string) error {
 		}
 		b.log("Packaging pack for release: %s", pack.Name)
 
-		tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("  %s", s) })
+		tr := NewToolRunner(b.Ctx, filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("  %s", s) })
 		tr.Semaphore = b.procSem
 
 		safePackName := filepath.Clean(pack.Name)
@@ -832,7 +876,14 @@ func (b *ModBuilder) BuildFileHashRegistry(inputDirs []string, outputName string
 	return os.WriteFile(outputPath, []byte("{}"), 0644)
 }
 
-func (b *ModBuilder) InstallAll(targetGameDir, packFilter, exeName string) error {
+func (b *ModBuilder) InstallAll(targetGameDir, packFilter, exeName string) (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Install failed: %v", err)
+		} else {
+			b.log("Install sequence completed.")
+		}
+	}()
 	b.log("Starting installation to: %s", targetGameDir)
 
 	// Automatic Cleanup: Uninstall any previous mod state first to avoid conflicts
@@ -1204,6 +1255,9 @@ func (b *ModBuilder) BuildPack(pack BundlePack) error {
 }
 
 func (b *ModBuilder) BuildItem(item BundleItem) error {
+	if b.Ctx != nil && b.Ctx.Err() != nil {
+		return b.Ctx.Err()
+	}
 	stateVal, loaded := b.itemState.LoadOrStore(item.Name, &ItemBuilderState{})
 	state := stateVal.(*ItemBuilderState)
 
@@ -1217,6 +1271,10 @@ func (b *ModBuilder) BuildItem(item BundleItem) error {
 		os.MkdirAll(itemBuildDir, 0755)
 
 		for _, file := range item.Files {
+			if b.Ctx != nil && b.Ctx.Err() != nil {
+				state.err = b.Ctx.Err()
+				return state.err
+			}
 			if err := b.ProcessFile(item, file, itemBuildDir); err != nil {
 				state.err = err
 				return err
@@ -1236,7 +1294,7 @@ func (b *ModBuilder) BuildItem(item BundleItem) error {
 				bigFile = filepath.Join(b.ReleaseDir, item.Name+item.BigSuffix)
 			}
 
-			tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
+			tr := NewToolRunner(b.Ctx, filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
 			tr.Semaphore = b.procSem
 			relBig, _ := filepath.Rel(b.ProjectDir, bigFile)
 
@@ -1275,6 +1333,9 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 
 	// Helper for single file processing
 	process := func(match, targetPath string) error {
+		if b.Ctx != nil && b.Ctx.Err() != nil {
+			return b.Ctx.Err()
+		}
 		info, err := os.Stat(match)
 		if err != nil {
 			return err
@@ -1315,8 +1376,16 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 
 	if b.Parallel {
 		for _, st := range file.SourceTargetList {
+			if b.Ctx != nil && b.Ctx.Err() != nil {
+				state.err = b.Ctx.Err()
+				break
+			}
 			matches, _ := b.recursiveGlob(filepath.Join(sourceBase, st.Source))
 			for _, match := range matches {
+				if b.Ctx != nil && b.Ctx.Err() != nil {
+					state.err = b.Ctx.Err()
+					break
+				}
 				state.wg.Add(1)
 				go func(m, t string) {
 					defer state.wg.Done()
@@ -1354,8 +1423,14 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 		return state.err
 	} else {
 		for _, st := range file.SourceTargetList {
+			if b.Ctx != nil && b.Ctx.Err() != nil {
+				return b.Ctx.Err()
+			}
 			matches, _ := b.recursiveGlob(filepath.Join(sourceBase, st.Source))
 			for _, match := range matches {
+				if b.Ctx != nil && b.Ctx.Err() != nil {
+					return b.Ctx.Err()
+				}
 				dstPath := b.resolveTargetWildcard(sourceBase, match, targetDir, st.Target)
 				if err := process(match, dstPath); err != nil {
 					return err
@@ -1364,8 +1439,14 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 		}
 
 		for _, pattern := range file.SourceList {
+			if b.Ctx != nil && b.Ctx.Err() != nil {
+				return b.Ctx.Err()
+			}
 			matches, _ := b.recursiveGlob(filepath.Join(sourceBase, pattern))
 			for _, match := range matches {
+				if b.Ctx != nil && b.Ctx.Err() != nil {
+					return b.Ctx.Err()
+				}
 				rel, _ := filepath.Rel(sourceBase, match)
 				dstPath := filepath.Join(targetDir, rel)
 				if err := process(match, dstPath); err != nil {
@@ -1520,6 +1601,8 @@ func (b *ModBuilder) processInternal(item BundleItem, file BundleFile, srcPath, 
 	return b.copyAndTransform(item, file, srcPath, dstPath, params)
 }
 
+
+
 func (b *ModBuilder) processTexture(item BundleItem, file BundleFile, srcPath, dstPath string, params map[string]interface{}) error {
 	dstExt := strings.ToLower(filepath.Ext(dstPath))
 
@@ -1527,7 +1610,7 @@ func (b *ModBuilder) processTexture(item BundleItem, file BundleFile, srcPath, d
 		b.log("    Optimizing texture: %s -> %s", filepath.Base(srcPath), filepath.Base(dstPath))
 		os.MkdirAll(filepath.Dir(dstPath), 0755)
 
-		tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
+		tr := NewToolRunner(b.Ctx, filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
 		tr.Semaphore = b.procSem
 
 		// Basic crunch arguments
@@ -1560,6 +1643,9 @@ func (b *ModBuilder) processTexture(item BundleItem, file BundleFile, srcPath, d
 		}
 
 		if err := tr.RunCrunch(args...); err != nil {
+			if b.Ctx != nil && b.Ctx.Err() != nil {
+				return b.Ctx.Err()
+			}
 			// Fallback to simple copy if crunch fails (e.g. source is PSD/TIFF which crunch doesn't support directly)
 			b.log("      Crunch failed or unsupported source: %v. Copying raw if compatible.", err)
 			if srcExt := strings.ToLower(filepath.Ext(srcPath)); srcExt == ".tga" || srcExt == ".dds" {
@@ -1616,7 +1702,7 @@ func (b *ModBuilder) compileGameText(item BundleItem, file BundleFile, srcPath, 
 		}
 	}
 
-	tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
+	tr := NewToolRunner(b.Ctx, filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
 	tr.Semaphore = b.procSem
 	relSrc, _ := filepath.Rel(b.ProjectDir, tmpStr)
 	relDst, _ := filepath.Rel(b.ProjectDir, dstPath)
@@ -1646,7 +1732,7 @@ func (b *ModBuilder) decompileGameText(_ BundleItem, _ BundleFile, srcPath, dstP
 	b.log("    Decompiling CSF: %s -> %s", filepath.Base(srcPath), filepath.Base(dstPath))
 	os.MkdirAll(filepath.Dir(dstPath), 0755)
 
-	tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
+	tr := NewToolRunner(b.Ctx, filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
 	tr.Semaphore = b.procSem
 	relSrc, _ := filepath.Rel(b.ProjectDir, srcPath)
 	relDst, _ := filepath.Rel(b.ProjectDir, dstPath)
@@ -1660,6 +1746,9 @@ func (b *ModBuilder) decompileGameText(_ BundleItem, _ BundleFile, srcPath, dstP
 }
 
 func (b *ModBuilder) copyAndTransform(_ BundleItem, file BundleFile, src, dst string, params map[string]interface{}) error {
+	if b.Ctx != nil && b.Ctx.Err() != nil {
+		return b.Ctx.Err()
+	}
 	info, err := os.Stat(src)
 	if err != nil || info.IsDir() {
 		return nil
@@ -1782,7 +1871,14 @@ func (b *ModBuilder) removeComments(content, marker string) string {
 	return strings.Join(lines, "\n")
 }
 
-func (b *ModBuilder) MakeChangeLog() error {
+func (b *ModBuilder) MakeChangeLog() (err error) {
+	defer func() {
+		if err != nil {
+			b.log("Changelog generation failed: %v", err)
+		} else {
+			b.log("Changelog generated successfully.")
+		}
+	}()
 	b.log("Generating project change log...")
 	configPath := filepath.Join(b.ProjectDir, "Project", "ModChangeLog.json")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {

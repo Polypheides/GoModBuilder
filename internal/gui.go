@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -119,7 +120,7 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 
 	if err := (declarative.MainWindow{
 		AssignTo: &mw.MainWindow,
-		Title:    "Go Mod Builder v1.1 by Polypheides",
+		Title:    "Go Mod Builder v2.0 by Polypheides",
 		Size:     declarative.Size{Width: 950, Height: 550},
 		MinSize:  declarative.Size{Width: 850, Height: 450},
 		Font:     declarative.Font{Family: "Segoe UI", PointSize: 9},
@@ -360,10 +361,18 @@ func (mw *ModBuilderWindow) runAsync(action func()) {
 	mw.updatingUI = true
 	mw.setButtonsEnabled(false)
 
+	if mw.builder.CancelFunc != nil {
+		mw.builder.CancelFunc()
+	}
+	mw.builder.Ctx, mw.builder.CancelFunc = context.WithCancel(context.Background())
+
 	go func() {
 		defer func() {
 			mw.Synchronize(func() { mw.updatingUI = false })
 			mw.setButtonsEnabled(true)
+			if mw.builder.CancelFunc != nil {
+				mw.builder.CancelFunc()
+			}
 		}()
 		action()
 	}()
@@ -438,11 +447,7 @@ func (mw *ModBuilderWindow) runSnapshot() {
 		exeName = mw.cmExe.Text()
 	})
 	gameDir := mw.builder.GetGameDir("", exeName)
-	if err := mw.builder.RefreshBaseline(gameDir); err != nil {
-		mw.log(fmt.Sprintf("Error taking snapshot: %v", err))
-	} else {
-		mw.log("Vanilla Baseline Snapshot created successfully!")
-	}
+	mw.builder.RefreshBaseline(gameDir)
 }
 
 func (mw *ModBuilderWindow) runBuild() {
@@ -467,11 +472,7 @@ func (mw *ModBuilderWindow) runBuild() {
 	}
 
 	mw.builder.Parallel = parallel
-	if err := mw.builder.BuildAll(selectedPacks...); err != nil {
-		mw.log(fmt.Sprintf("Build failed: %v", err))
-	} else {
-		mw.log("Build sequence completed.")
-	}
+	mw.builder.BuildAll(selectedPacks...)
 }
 
 func (mw *ModBuilderWindow) runBuildRelease() {
@@ -492,11 +493,7 @@ func (mw *ModBuilderWindow) runBuildRelease() {
 	}
 
 	mw.builder.Parallel = parallel
-	if err := mw.builder.ZipRelease(selectedPacks...); err != nil {
-		mw.log(fmt.Sprintf("Zip Release failed: %v", err))
-	} else {
-		mw.log("Zip Release sequence completed.")
-	}
+	mw.builder.ZipRelease(selectedPacks...)
 }
 
 func (mw *ModBuilderWindow) runInstall() {
@@ -562,7 +559,6 @@ func (mw *ModBuilderWindow) runInstall() {
 		mw.log(fmt.Sprintf("Error saving install state: %v", err))
 	} else {
 		mw.builder.CheckGameInstallFiles(gameDir, state)
-		mw.log("Install completed.")
 	}
 }
 
@@ -571,20 +567,12 @@ func (mw *ModBuilderWindow) runUninstall() {
 	mw.Synchronize(func() {
 		exeName = mw.cmExe.Text()
 	})
-	if err := mw.builder.Uninstall(exeName); err != nil {
-		mw.log(fmt.Sprintf("Error during uninstall: %v", err))
-	} else {
-		mw.log("Uninstall completed.")
-	}
+	mw.builder.Uninstall(exeName)
 }
 
 func (mw *ModBuilderWindow) runClean() {
 	mw.log("Cleaning...")
-	if err := mw.builder.CleanAll(); err != nil {
-		mw.log(fmt.Sprintf("Clean failed: %v", err))
-	} else {
-		mw.log("Clean completed successfully.")
-	}
+	mw.builder.CleanAll()
 }
 
 func (mw *ModBuilderWindow) runGame() {
@@ -599,22 +587,21 @@ func (mw *ModBuilderWindow) runGame() {
 	}
 	mw.log(fmt.Sprintf("Launching %s...", exeName))
 
-	if err := mw.builder.RunGame("_absInstallDir", exeName, "", args); err != nil {
-		mw.log(fmt.Sprintf("Failed to launch game: %v", err))
-	}
+	mw.builder.RunGame("_absInstallDir", exeName, "", args)
 }
 
 func (mw *ModBuilderWindow) runMakeChangeLog() {
 	mw.log("Generating Changelog...")
-	if err := mw.builder.MakeChangeLog(); err != nil {
-		mw.log(fmt.Sprintf("Changelog generation failed: %v", err))
-	} else {
-		mw.log("Changelog generated successfully.")
-	}
+	mw.builder.MakeChangeLog()
 }
 
 func (mw *ModBuilderWindow) runAbort() {
-	mw.log("Abort signaled (Background cancellation currently unhandled).")
+	if mw.builder.CancelFunc != nil {
+		mw.log("Received Abort Request - Triggering shutdown sequence...")
+		mw.builder.CancelFunc()
+	} else {
+		mw.log("No process currently running to abort.")
+	}
 }
 
 func (mw *ModBuilderWindow) log(msg string) {

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -13,9 +14,10 @@ import (
 )
 
 type ToolRunner struct {
+	Ctx        context.Context
 	ToolsDir   string
 	ProjectDir string
-	Logger     func(string)
+	Log        func(string)
 	Semaphore  chan struct{}
 }
 
@@ -45,13 +47,18 @@ var DefaultTools = map[string]struct {
 	},
 }
 
-func NewToolRunner(toolsDir, projectDir string, logger func(string)) *ToolRunner {
-	return &ToolRunner{ToolsDir: toolsDir, ProjectDir: projectDir, Logger: logger}
+func NewToolRunner(ctx context.Context, toolsDir, projectDir string, log func(string)) *ToolRunner {
+	return &ToolRunner{
+		Ctx:        ctx,
+		ToolsDir:   toolsDir,
+		ProjectDir: projectDir,
+		Log:        log,
+	}
 }
 
 func (tr *ToolRunner) log(format string, a ...interface{}) {
-	if tr.Logger != nil {
-		tr.Logger(fmt.Sprintf(format, a...))
+	if tr.Log != nil {
+		tr.Log(fmt.Sprintf(format, a...))
 	}
 }
 
@@ -62,7 +69,12 @@ func (tr *ToolRunner) run(cmdPath string, args ...string) error {
 	}
 
 	tr.log("Running: %s %v", filepath.Base(cmdPath), args)
-	cmd := exec.Command(cmdPath, args...)
+	var cmd *exec.Cmd
+	if tr.Ctx != nil {
+		cmd = exec.CommandContext(tr.Ctx, cmdPath, args...)
+	} else {
+		cmd = exec.Command(cmdPath, args...)
+	}
 	cmd.Dir = tr.ProjectDir
 	output, err := cmd.CombinedOutput()
 	if len(output) > 0 {
