@@ -406,10 +406,10 @@ func (mw *ModBuilderWindow) runBuildRelease() {
 		selectedPacks = append(selectedPacks, mw.packs.Bundles.Packs[idx].Name)
 	}
 
-	if err := mw.builder.BuildRelease(selectedPacks...); err != nil {
-		mw.log(fmt.Sprintf("Build Release failed: %v", err))
+	if err := mw.builder.ZipRelease(selectedPacks...); err != nil {
+		mw.log(fmt.Sprintf("Zip Release failed: %v", err))
 	} else {
-		mw.log("Build Release sequence completed.")
+		mw.log("Zip Release sequence completed.")
 	}
 }
 

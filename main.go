@@ -100,7 +100,7 @@ func main() {
 	}
 
 	if *releaseFlag {
-		if err := b.BuildRelease(*packFlag); err != nil {
+		if err := b.ZipRelease(*packFlag); err != nil {
 			log.Fatalf("Release failed: %v", err)
 		}
 	}

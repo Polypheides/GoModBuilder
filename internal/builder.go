@@ -593,8 +593,52 @@ func (b *ModBuilder) BuildAll(packFilters ...string) error {
 	return nil
 }
 
-func (b *ModBuilder) BuildRelease(packFilters ...string) error {
-	b.log("Starting release process...")
+func isPathSafe(name string) bool {
+	clean := filepath.Clean(name)
+	return !filepath.IsAbs(clean) && clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+var isCaseInsensitiveFS *bool
+
+func checkCaseInsensitive(dir string) bool {
+	if isCaseInsensitiveFS != nil {
+		return *isCaseInsensitiveFS
+	}
+	tmpPath := filepath.Join(dir, ".CaseCheck")
+	os.WriteFile(tmpPath, []byte(""), 0644)
+	defer os.Remove(tmpPath)
+	_, err := os.Stat(filepath.Join(dir, ".casecheck"))
+	val := err == nil
+	isCaseInsensitiveFS = &val
+	return val
+}
+
+func copyFileFallback(src, dst string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cErr := out.Close(); cErr != nil && err == nil {
+			err = cErr
+		}
+		if err != nil {
+			os.Remove(dst)
+		}
+	}()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func (b *ModBuilder) ZipRelease(packFilters ...string) error {
+	b.log("Starting Zip Release sequence...")
 	os.MkdirAll(b.ReleaseDir, 0755)
 
 	match := func(name string) bool {
@@ -609,36 +653,119 @@ func (b *ModBuilder) BuildRelease(packFilters ...string) error {
 		return false
 	}
 
+	generatedZips := make(map[string]bool)
+
 	for _, pack := range b.PacksConfig.Bundles.Packs {
 		if !match(pack.Name) {
 			continue
 		}
+		if !isPathSafe(pack.Name) {
+			return fmt.Errorf("pack name '%s' is unsafe: absolute paths and directory escapes are not allowed", pack.Name)
+		}
 		b.log("Packaging pack for release: %s", pack.Name)
-		if err := b.BuildPack(pack); err != nil {
-			return err
+
+		tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("  %s", s) })
+		tr.Semaphore = b.procSem
+
+		safePackName := filepath.Clean(pack.Name)
+		zipPath := filepath.Join(b.ReleaseDir, safePackName+".zip")
+
+		collisionKey := zipPath
+		if checkCaseInsensitive(b.ReleaseDir) {
+			collisionKey = strings.ToLower(zipPath)
 		}
 
-		tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
-		tr.Semaphore = b.procSem
-		zipPath := filepath.Join(b.ReleaseDir, pack.Name+".zip")
+		if generatedZips[collisionKey] {
+			return fmt.Errorf("pack name collision: '%s' resolves to the same release zip path as another pack", pack.Name)
+		}
+		generatedZips[collisionKey] = true
 
 		relZip, _ := filepath.Rel(b.ProjectDir, zipPath)
-		os.Remove(zipPath)
+
+		var zipArgs []string
 
 		for _, itemName := range pack.ItemNames {
-			item := b.findItemByName(itemName)
-			ext := ".big"
-			if item != nil && item.BigSuffix != "" {
-				ext = item.BigSuffix
+			if !isPathSafe(itemName) {
+				return fmt.Errorf("item name '%s' in pack '%s' is unsafe: absolute paths and directory escapes are not allowed", itemName, pack.Name)
 			}
-			bigFile := filepath.Join(b.ReleaseDir, itemName+ext)
-			if _, err := os.Stat(bigFile); err == nil {
-				b.log("  Adding to archive: %s", filepath.Base(bigFile))
-				relBig, _ := filepath.Rel(b.ProjectDir, bigFile)
-				if err := tr.Run7z("a", "-tzip", "-mx9", relZip, relBig); err != nil {
-					return fmt.Errorf("7z failed for %s: %v", itemName, err)
+			item := b.findItemByName(itemName)
+
+			if item != nil && item.Big {
+				ext := ".big"
+				if item.BigSuffix != "" {
+					ext = item.BigSuffix
+				}
+				bigFile := filepath.Join(b.ReleaseDir, itemName+ext)
+				if _, err := os.Stat(bigFile); err == nil {
+					b.log("  Adding to archive: %s", filepath.Base(bigFile))
+					relBig, _ := filepath.Rel(b.ProjectDir, bigFile)
+					zipArgs = append(zipArgs, relBig)
+				} else {
+					return fmt.Errorf("missing built file %s for pack %s. Did you forget to Build first?", filepath.Base(bigFile), pack.Name)
+				}
+			} else if item != nil && !item.Big {
+				// Handle raw loose files
+				itemBuildDir := filepath.Join(b.BuildDir, itemName)
+				if info, err := os.Stat(itemBuildDir); err == nil && info.IsDir() {
+					b.log("  Adding raw folder to archive: %s", itemName)
+					relRaw, _ := filepath.Rel(b.ProjectDir, itemBuildDir)
+					// Append \* to zip contents of folder instead of folder itself
+					zipArgs = append(zipArgs, filepath.Join(relRaw, "*"))
+				} else {
+					return fmt.Errorf("missing built raw folder %s for pack %s. Did you forget to Build first?", itemName, pack.Name)
+				}
+			} else {
+				return fmt.Errorf("item '%s' referenced in pack '%s' is unresolved or missing from items config", itemName, pack.Name)
+			}
+		}
+
+		if len(zipArgs) > 0 {
+			tmpZipPath := zipPath + ".tmp"
+			relTmpZip := relZip + ".tmp"
+			os.Remove(tmpZipPath)
+
+			args := append([]string{"a", "-tzip", "-mx5", relTmpZip}, zipArgs...)
+			if err := tr.Run7z(args...); err != nil {
+				os.Remove(tmpZipPath)
+				return fmt.Errorf("7z failed for pack %s: %v", pack.Name, err)
+			}
+
+			bakZipPath := zipPath + ".bak"
+			os.Remove(bakZipPath)
+
+			hasOldZip := false
+			if _, err := os.Stat(zipPath); err == nil {
+				hasOldZip = true
+				if err := os.Rename(zipPath, bakZipPath); err != nil {
+					os.Remove(tmpZipPath)
+					return fmt.Errorf("failed to backup old zip %s before replacement: %v", relZip, err)
 				}
 			}
+
+			if err := os.Rename(tmpZipPath, zipPath); err != nil {
+				errMsg := fmt.Sprintf("failed to rename temp zip to %s: %v. The built archive has been safely preserved at %s", relZip, err, tmpZipPath)
+				if hasOldZip {
+					if rbErr := os.Rename(bakZipPath, zipPath); rbErr != nil {
+						// Fallback to manual file copy if rename fails
+						if cpErr := copyFileFallback(bakZipPath, zipPath); cpErr != nil {
+							errMsg += fmt.Sprintf(". CRITICAL: Rollback failed! rename: %v; copy fallback: %v; original archive at %s", rbErr, cpErr, bakZipPath)
+						} else {
+							if err := os.Remove(bakZipPath); err != nil {
+								b.log("  Warning: failed to remove stale backup %s: %v", bakZipPath, err)
+							}
+						}
+					}
+				}
+				return fmt.Errorf("%s", errMsg)
+			}
+
+			if hasOldZip {
+				if err := os.Remove(bakZipPath); err != nil && !os.IsNotExist(err) {
+					b.log("  Warning: failed to remove stale backup %s: %v", bakZipPath, err)
+				}
+			}
+		} else {
+			return fmt.Errorf("no items were successfully resolved for pack %s, archive creation aborted", pack.Name)
 		}
 
 		if _, err := os.Stat(zipPath); err == nil {
@@ -646,6 +773,7 @@ func (b *ModBuilder) BuildRelease(packFilters ...string) error {
 			b.generateHashFiles(zipPath)
 		}
 	}
+
 	return nil
 }
 
@@ -1104,7 +1232,7 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 		b.cacheMutex.Unlock()
 
 		err = b.processInternal(item, file, match, targetPath, file.Params)
-		
+
 		b.cacheMutex.Lock()
 		if err == nil {
 			b.cache.Files[targetPath] = FileHash{Size: info.Size(), SHA256: sha256Hash, ConfigHash: pHash}
