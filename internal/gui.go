@@ -28,9 +28,22 @@ type ModBuilderWindow struct {
 	cbOptionAutoClear   *walk.CheckBox
 	cbOptionVerbose     *walk.CheckBox
 	cbOptionParallel    *walk.CheckBox
+
+	btnExecute          *walk.PushButton
+	btnSnapshot         *walk.PushButton
+	btnChangelog        *walk.PushButton
+	btnClean            *walk.PushButton
+	btnBuild            *walk.PushButton
+	btnBuildRelease     *walk.PushButton
+	btnInstall          *walk.PushButton
+	btnRunGame          *walk.PushButton
+	btnUninstall       *walk.PushButton
+
 	builder             *ModBuilder
 	items               *ModBundleItems
 	packs               *ModBundlePacks
+
+	
 
 	// Path and Execution Controls
 	cmProjectDir *walk.ComboBox
@@ -152,6 +165,7 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 							declarative.CheckBox{AssignTo: &mw.cbSequenceUninstall, Text: "Uninstall", Checked: true, ToolTipText: "Uninstalls the current mod before new actions."},
 							declarative.VSpacer{}, // Pushes execute button to the bottom
 							declarative.PushButton{
+								AssignTo:    &mw.btnExecute,
 								Text:        "Execute",
 								Font:        declarative.Font{Bold: true},
 								ToolTipText: "Run the selected sequence of actions.",
@@ -161,20 +175,19 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 					},
 
 					// --- Column 3: Single Actions ---
-					declarative.GroupBox{
-						Title:   "Single actions",
-						Layout:  declarative.VBox{Spacing: 5},
+					declarative.Composite{
+						Layout:  declarative.VBox{Margins: declarative.Margins{Left: 5, Top: 5, Right: 5, Bottom: 5}},
 						MinSize: declarative.Size{Width: 150}, // Increased for better padding
 						MaxSize: declarative.Size{Width: 150},
 						Children: []declarative.Widget{
-							declarative.PushButton{Text: "Snapshot", ToolTipText: "Captures a vanilla baseline of the game directory.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runSnapshot() }) }},
-							declarative.PushButton{Text: "Changelog", ToolTipText: "Generates the project changelog.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runMakeChangeLog() }) }},
-							declarative.PushButton{Text: "Clean", ToolTipText: "Cleans output directories.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runClean() }) }},
-							declarative.PushButton{Text: "Build", ToolTipText: "Builds the selected packs.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runBuild() }) }},
-							declarative.PushButton{Text: "Zip Release", ToolTipText: "Packages the build into release files.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runBuildRelease() }) }},
-							declarative.PushButton{Text: "Install", ToolTipText: "Installs the selected packs.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runInstall() }) }},
-							declarative.PushButton{Text: "Run Game", ToolTipText: "Launches the game executable.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runGame() }) }},
-							declarative.PushButton{Text: "Uninstall", ToolTipText: "Removes currently installed mod files.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runUninstall() }) }},
+							declarative.PushButton{AssignTo: &mw.btnSnapshot, Text: "Snapshot", ToolTipText: "Captures a vanilla baseline of the game directory.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runSnapshot() }) }},
+							declarative.PushButton{AssignTo: &mw.btnChangelog, Text: "Changelog", ToolTipText: "Generates the project changelog.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runMakeChangeLog() }) }},
+							declarative.PushButton{AssignTo: &mw.btnClean, Text: "Clean", ToolTipText: "Cleans output directories.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runClean() }) }},
+							declarative.PushButton{AssignTo: &mw.btnBuild, Text: "Build", ToolTipText: "Builds the selected packs.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runBuild() }) }},
+							declarative.PushButton{AssignTo: &mw.btnBuildRelease, Text: "Zip Release", ToolTipText: "Packages the build into release files.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runBuildRelease() }) }},
+							declarative.PushButton{AssignTo: &mw.btnInstall, Text: "Install", ToolTipText: "Installs the selected packs.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runInstall() }) }},
+							declarative.PushButton{AssignTo: &mw.btnRunGame, Text: "Run Game", ToolTipText: "Launches the game executable.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runGame() }) }},
+							declarative.PushButton{AssignTo: &mw.btnUninstall, Text: "Uninstall", ToolTipText: "Removes currently installed mod files.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runUninstall() }) }},
 							declarative.VSpacer{},
 							declarative.PushButton{Text: "Abort", ToolTipText: "Abort current operations.", OnClicked: mw.runAbort},
 						},
@@ -324,13 +337,34 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 
 // --- Logic & Event Handlers ---
 
+func (mw *ModBuilderWindow) setButtonsEnabled(enabled bool) {
+	mw.Synchronize(func() {
+		if mw.btnExecute != nil {
+			mw.btnExecute.SetEnabled(enabled)
+			mw.btnSnapshot.SetEnabled(enabled)
+			mw.btnChangelog.SetEnabled(enabled)
+			mw.btnClean.SetEnabled(enabled)
+			mw.btnBuild.SetEnabled(enabled)
+			mw.btnBuildRelease.SetEnabled(enabled)
+			mw.btnInstall.SetEnabled(enabled)
+			mw.btnRunGame.SetEnabled(enabled)
+			mw.btnUninstall.SetEnabled(enabled)
+		}
+	})
+}
+
 func (mw *ModBuilderWindow) runAsync(action func()) {
 	if mw.updatingUI {
 		return
 	}
 	mw.updatingUI = true
+	mw.setButtonsEnabled(false)
+
 	go func() {
-		defer mw.Synchronize(func() { mw.updatingUI = false })
+		defer func() {
+			mw.Synchronize(func() { mw.updatingUI = false })
+			mw.setButtonsEnabled(true)
+		}()
 		action()
 	}()
 }
