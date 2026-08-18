@@ -21,6 +21,43 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+type ItemBuilderState struct {
+	wg      sync.WaitGroup
+	err     error
+	mu      sync.Mutex
+	changed bool
+}
+
+type FileHash struct {
+	Size       int64  `json:"size"`
+	SHA256     string `json:"sha256"`
+	ConfigHash string `json:"configHash"`
+}
+
+type IncrementalCache struct {
+	Files map[string]FileHash `json:"files"`
+}
+
+func calculateFileSHA256(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func hashFileConfig(file BundleFile) string {
+	bytes, _ := json.Marshal(file)
+	hash := sha256.Sum256(bytes)
+	return hex.EncodeToString(hash[:])
+}
+
 type ModBuilder struct {
 	ItemsConfig   *ModBundleItems
 	PacksConfig   *ModBundlePacks
@@ -36,6 +73,11 @@ type ModBuilder struct {
 
 	// Baseline Management
 	BaselineFilenames map[string]bool
+
+	itemState sync.Map
+
+	cacheMutex sync.Mutex
+	cache      IncrementalCache
 }
 
 func NewModBuilder(items *ModBundleItems, packs *ModBundlePacks, projectDir string) *ModBuilder {
@@ -47,6 +89,7 @@ func NewModBuilder(items *ModBundleItems, packs *ModBundlePacks, projectDir stri
 		ReleaseDir:        filepath.Join(projectDir, "_absReleaseDir"),
 		procSem:           make(chan struct{}, runtime.NumCPU()),
 		BaselineFilenames: make(map[string]bool),
+		cache:             IncrementalCache{Files: make(map[string]FileHash)},
 	}
 	return b
 }
@@ -61,7 +104,7 @@ func (b *ModBuilder) getMetadataPath(gameDir string, filename string) string {
 	normalized := strings.TrimSpace(strings.ToLower(filepath.ToSlash(abs)))
 	normalized = strings.TrimSuffix(normalized, "/")
 
-	hash := md5.Sum([]byte(normalized))
+	hash := sha256.Sum256([]byte(normalized))
 	hashStr := hex.EncodeToString(hash[:])
 
 	exePath, err := os.Executable()
@@ -182,6 +225,8 @@ func (b *ModBuilder) CleanAll() error {
 	b.log("Cleaning build and release directories...")
 	os.RemoveAll(b.BuildDir)
 	os.RemoveAll(b.ReleaseDir)
+	cachePath := filepath.Join(b.BuildDir, "incremental_cache.json")
+	os.Remove(cachePath)
 	os.MkdirAll(b.BuildDir, 0755)
 	os.MkdirAll(b.ReleaseDir, 0755)
 	return nil
@@ -490,6 +535,16 @@ func (b *ModBuilder) BuildAll(packFilters ...string) error {
 
 	os.MkdirAll(b.BuildDir, 0755)
 	os.MkdirAll(b.ReleaseDir, 0755)
+
+	cachePath := filepath.Join(b.BuildDir, "incremental_cache.json")
+	b.cache = IncrementalCache{Files: make(map[string]FileHash)}
+	if cacheBytes, err := os.ReadFile(cachePath); err == nil {
+		json.Unmarshal(cacheBytes, &b.cache)
+	}
+	defer func() {
+		cacheBytes, _ := json.MarshalIndent(b.cache, "", "  ")
+		os.WriteFile(cachePath, cacheBytes, 0644)
+	}()
 
 	match := func(name string) bool {
 		if len(packFilters) == 0 {
@@ -1019,20 +1074,60 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 		return b.processInternal(item, file, srcPath, dstPath, file.Params)
 	}
 
-	if b.Parallel {
-		var wg sync.WaitGroup
-		var errOnce sync.Once
-		var buildErr error
+	state := &ItemBuilderState{}
 
+	// Helper for single file processing
+	process := func(match, targetPath string) error {
+		info, err := os.Stat(match)
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		sha256Hash, err := calculateFileSHA256(match)
+		if err != nil {
+			return err
+		}
+
+		pHash := hashFileConfig(file)
+
+		b.cacheMutex.Lock()
+		cached, exists := b.cache.Files[targetPath]
+		if exists && cached.Size == info.Size() && cached.SHA256 == sha256Hash && cached.ConfigHash == pHash {
+			if _, err := os.Stat(targetPath); err == nil {
+				b.cacheMutex.Unlock()
+				return nil
+			}
+		}
+		b.cacheMutex.Unlock()
+
+		err = b.processInternal(item, file, match, targetPath, file.Params)
+		
+		b.cacheMutex.Lock()
+		if err == nil {
+			b.cache.Files[targetPath] = FileHash{Size: info.Size(), SHA256: sha256Hash, ConfigHash: pHash}
+		} else {
+			delete(b.cache.Files, targetPath)
+		}
+		b.cacheMutex.Unlock()
+
+		return err
+	}
+
+	if b.Parallel {
 		for _, st := range file.SourceTargetList {
 			matches, _ := b.recursiveGlob(filepath.Join(sourceBase, st.Source))
 			for _, match := range matches {
-				wg.Add(1)
+				state.wg.Add(1)
 				go func(m, t string) {
-					defer wg.Done()
+					defer state.wg.Done()
 					dstPath := b.resolveTargetWildcard(sourceBase, m, targetDir, t)
-					if err := b.processInternal(item, file, m, dstPath, file.Params); err != nil {
-						errOnce.Do(func() { buildErr = err })
+					if err := process(m, dstPath); err != nil {
+						state.mu.Lock()
+						state.err = err
+						state.mu.Unlock()
 					}
 				}(match, st.Target)
 			}
@@ -1041,25 +1136,27 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 		for _, pattern := range file.SourceList {
 			matches, _ := b.recursiveGlob(filepath.Join(sourceBase, pattern))
 			for _, match := range matches {
-				wg.Add(1)
+				state.wg.Add(1)
 				go func(m string) {
-					defer wg.Done()
+					defer state.wg.Done()
 					rel, _ := filepath.Rel(sourceBase, m)
 					dstPath := filepath.Join(targetDir, rel)
-					if err := b.processInternal(item, file, m, dstPath, file.Params); err != nil {
-						errOnce.Do(func() { buildErr = err })
+					if err := process(m, dstPath); err != nil {
+						state.mu.Lock()
+						state.err = err
+						state.mu.Unlock()
 					}
 				}(match)
 			}
 		}
-		wg.Wait()
-		return buildErr
+		state.wg.Wait()
+		return state.err
 	} else {
 		for _, st := range file.SourceTargetList {
 			matches, _ := b.recursiveGlob(filepath.Join(sourceBase, st.Source))
 			for _, match := range matches {
 				dstPath := b.resolveTargetWildcard(sourceBase, match, targetDir, st.Target)
-				if err := b.processInternal(item, file, match, dstPath, file.Params); err != nil {
+				if err := process(match, dstPath); err != nil {
 					return err
 				}
 			}
@@ -1070,7 +1167,7 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 			for _, match := range matches {
 				rel, _ := filepath.Rel(sourceBase, match)
 				dstPath := filepath.Join(targetDir, rel)
-				if err := b.processInternal(item, file, match, dstPath, file.Params); err != nil {
+				if err := process(match, dstPath); err != nil {
 					return err
 				}
 			}
