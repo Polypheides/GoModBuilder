@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 )
 
 type ToolRunner struct {
@@ -73,7 +74,15 @@ func (tr *ToolRunner) run(cmdPath string, args ...string) error {
 	return nil
 }
 
+var (
+	gbcMutex sync.Mutex
+	gtcMutex sync.Mutex
+)
+
 func (tr *ToolRunner) RunBigCreator(args ...string) error {
+	gbcMutex.Lock()
+	defer gbcMutex.Unlock()
+
 	path, err := tr.GetToolPath("generalsbigcreator.exe")
 	if err != nil {
 		return err
@@ -82,6 +91,9 @@ func (tr *ToolRunner) RunBigCreator(args ...string) error {
 }
 
 func (tr *ToolRunner) RunGameTextCompiler(args ...string) error {
+	gtcMutex.Lock()
+	defer gtcMutex.Unlock()
+
 	path, err := tr.GetToolPath("gametextcompiler.exe")
 	if err != nil {
 		return err
@@ -114,7 +126,6 @@ func (tr *ToolRunner) GetToolPath(toolName string) (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		if info, ok := DefaultTools[toolName]; ok && info.Hash != "" {
 			if tr.VerifyHash(path, info.Hash) {
-				tr.log("Tool %s already exists and hash verified.", toolName)
 				return path, nil
 			}
 			tr.log("WARNING: Tool %s exists but hash mismatch! Removing...", toolName)
@@ -146,7 +157,7 @@ func (tr *ToolRunner) GetToolPath(toolName string) (string, error) {
 func (tr *ToolRunner) DownloadFileWithVerify(url, target, expectedHash string) error {
 	tr.log("Downloading %s...", url)
 	os.MkdirAll(filepath.Dir(target), 0755)
-	
+
 	resp, err := http.Get(url)
 	if err != nil {
 		return err
