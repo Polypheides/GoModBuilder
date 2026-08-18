@@ -21,6 +21,11 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+type ItemBuilderState struct {
+	wg  sync.WaitGroup
+	err error
+}
+
 type ModBuilder struct {
 	ItemsConfig   *ModBundleItems
 	PacksConfig   *ModBundlePacks
@@ -33,9 +38,12 @@ type ModBuilder struct {
 	LogMutex      sync.Mutex
 	Parallel      bool
 	procSem       chan struct{} // Global semaphore for external processes
+	fileSem       chan struct{} // Semaphore for file I/O operations
 
 	// Baseline Management
 	BaselineFilenames map[string]bool
+
+	itemState sync.Map
 }
 
 func NewModBuilder(items *ModBundleItems, packs *ModBundlePacks, projectDir string) *ModBuilder {
@@ -46,6 +54,7 @@ func NewModBuilder(items *ModBundleItems, packs *ModBundlePacks, projectDir stri
 		BuildDir:          filepath.Join(projectDir, "_absBuildDir"),
 		ReleaseDir:        filepath.Join(projectDir, "_absReleaseDir"),
 		procSem:           make(chan struct{}, runtime.NumCPU()),
+		fileSem:           make(chan struct{}, runtime.NumCPU()*2),
 		BaselineFilenames: make(map[string]bool),
 	}
 	return b
@@ -164,13 +173,38 @@ func (b *ModBuilder) SetFolders(f *ModFolders) {
 	}
 }
 
+var globalLogFile *os.File
+var globalLogOnce sync.Once
+
 func (b *ModBuilder) log(format string, a ...interface{}) {
 	b.LogMutex.Lock()
 	defer b.LogMutex.Unlock()
 	msg := fmt.Sprintf(format, a...)
 
+	// Scrub PII (Personally Identifiable Information)
+	if b.ProjectDir != "" {
+		msg = strings.ReplaceAll(msg, b.ProjectDir, "[PROJECT_DIR]")
+		msg = strings.ReplaceAll(msg, filepath.ToSlash(b.ProjectDir), "[PROJECT_DIR]")
+	}
+	if b.CustomGameDir != "" {
+		msg = strings.ReplaceAll(msg, b.CustomGameDir, "[GAME_DIR]")
+		msg = strings.ReplaceAll(msg, filepath.ToSlash(b.CustomGameDir), "[GAME_DIR]")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		msg = strings.ReplaceAll(msg, home, "[USER_HOME]")
+		msg = strings.ReplaceAll(msg, filepath.ToSlash(home), "[USER_HOME]")
+	}
+
 	// Print to CLI
 	fmt.Println(msg)
+
+	// Write to global log file
+	globalLogOnce.Do(func() {
+		globalLogFile, _ = os.OpenFile(filepath.Join(b.ProjectDir, "GoModBuilder.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	})
+	if globalLogFile != nil {
+		globalLogFile.WriteString(time.Now().Format("2006-01-02 15:04:05") + " | " + msg + "\n")
+	}
 
 	// Pass to GUI Logger safely
 	if b.Logger != nil {
@@ -184,6 +218,10 @@ func (b *ModBuilder) CleanAll() error {
 	os.RemoveAll(b.ReleaseDir)
 	os.MkdirAll(b.BuildDir, 0755)
 	os.MkdirAll(b.ReleaseDir, 0755)
+
+	// Reset single-flight item state so items get rebuilt
+	b.itemState = sync.Map{}
+
 	return nil
 }
 
@@ -487,6 +525,9 @@ func (b *ModBuilder) BuildAll(packFilters ...string) error {
 	}()
 
 	b.log("Starting build process...")
+
+	// Reset single-flight state for fresh build
+	b.itemState = sync.Map{}
 
 	os.MkdirAll(b.BuildDir, 0755)
 	os.MkdirAll(b.ReleaseDir, 0755)
@@ -971,41 +1012,61 @@ func (b *ModBuilder) BuildPack(pack BundlePack) error {
 }
 
 func (b *ModBuilder) BuildItem(item BundleItem) error {
-	b.log("  Building item: %s", item.Name)
+	stateVal, loaded := b.itemState.LoadOrStore(item.Name, &ItemBuilderState{})
+	state := stateVal.(*ItemBuilderState)
 
-	itemBuildDir := filepath.Join(b.BuildDir, item.Name)
-	os.MkdirAll(itemBuildDir, 0755)
+	if !loaded {
+		state.wg.Add(1)
+		defer state.wg.Done()
 
-	for _, file := range item.Files {
-		if err := b.ProcessFile(item, file, itemBuildDir); err != nil {
-			return err
+		b.log("  Building item: %s", item.Name)
+
+		itemBuildDir := filepath.Join(b.BuildDir, item.Name)
+		os.MkdirAll(itemBuildDir, 0755)
+
+		for _, file := range item.Files {
+			if err := b.ProcessFile(item, file, itemBuildDir); err != nil {
+				state.err = err
+				return err
+			}
 		}
+
+		if item.Big {
+			files, err := os.ReadDir(itemBuildDir)
+			if err != nil || len(files) == 0 {
+				b.log("  Skipping BIG creation for empty item: %s", item.Name)
+				return nil
+			}
+
+			b.log("  Creating BIG for item: %s", item.Name)
+			bigFile := filepath.Join(b.ReleaseDir, item.Name+".big")
+			if item.BigSuffix != "" {
+				bigFile = filepath.Join(b.ReleaseDir, item.Name+item.BigSuffix)
+			}
+
+			tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
+			tr.Semaphore = b.procSem
+			relBig, _ := filepath.Rel(b.ProjectDir, bigFile)
+			
+			// Remove old big file first
+			os.Remove(bigFile)
+			
+			if err := tr.RunBigCreator("-source", itemBuildDir, "-dest", relBig); err != nil {
+				state.err = fmt.Errorf("generalsbigcreator failed for %s: %v", item.Name, err)
+				return state.err
+			}
+		}
+
+		return nil
+	} else {
+		state.wg.Wait()
+		if state.err != nil {
+			b.log("  Item %s failed in another goroutine.", item.Name)
+		}
+		return state.err
 	}
-
-	if item.Big {
-		files, err := os.ReadDir(itemBuildDir)
-		if err != nil || len(files) == 0 {
-			b.log("  Skipping BIG creation for empty item: %s", item.Name)
-			return nil
-		}
-
-		b.log("  Creating BIG for item: %s", item.Name)
-		bigFile := filepath.Join(b.ReleaseDir, item.Name+".big")
-		if item.BigSuffix != "" {
-			bigFile = filepath.Join(b.ReleaseDir, item.Name+item.BigSuffix)
-		}
-
-		tr := NewToolRunner(filepath.Join(b.ProjectDir, "internal", "bin"), b.ProjectDir, func(s string) { b.log("%s", s) })
-		tr.Semaphore = b.procSem
-		relBig, _ := filepath.Rel(b.ProjectDir, bigFile)
-		relSrc, _ := filepath.Rel(b.ProjectDir, itemBuildDir)
-		if err := tr.RunBigCreator("-dest", relBig, "-source", relSrc); err != nil {
-			return fmt.Errorf("failed to create BIG for %s: %v", item.Name, err)
-		}
-	}
-
-	return nil
 }
+
 
 func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir string) error {
 	sourceBase := filepath.Join(b.ProjectDir, "Project", file.SourceParent)
@@ -1030,6 +1091,8 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 				wg.Add(1)
 				go func(m, t string) {
 					defer wg.Done()
+					b.fileSem <- struct{}{}
+					defer func() { <-b.fileSem }()
 					dstPath := b.resolveTargetWildcard(sourceBase, m, targetDir, t)
 					if err := b.processInternal(item, file, m, dstPath, file.Params); err != nil {
 						errOnce.Do(func() { buildErr = err })
@@ -1044,6 +1107,8 @@ func (b *ModBuilder) ProcessFile(item BundleItem, file BundleFile, targetDir str
 				wg.Add(1)
 				go func(m string) {
 					defer wg.Done()
+					b.fileSem <- struct{}{}
+					defer func() { <-b.fileSem }()
 					rel, _ := filepath.Rel(sourceBase, m)
 					dstPath := filepath.Join(targetDir, rel)
 					if err := b.processInternal(item, file, m, dstPath, file.Params); err != nil {
@@ -1180,10 +1245,7 @@ func (b *ModBuilder) resolveTargetWildcard(sourceBase, matchPath, targetBase, ta
 }
 
 func (b *ModBuilder) processInternal(item BundleItem, file BundleFile, srcPath, dstPath string, params map[string]interface{}) error {
-	if strings.HasSuffix(strings.ToLower(srcPath), ".str") {
-		if !strings.HasSuffix(strings.ToLower(dstPath), ".csf") {
-			dstPath = strings.TrimSuffix(dstPath, filepath.Ext(dstPath)) + ".csf"
-		}
+	if strings.HasSuffix(strings.ToLower(srcPath), ".str") && strings.HasSuffix(strings.ToLower(dstPath), ".csf") {
 		return b.compileGameText(item, file, srcPath, dstPath, params)
 	}
 
@@ -1267,7 +1329,7 @@ func (b *ModBuilder) compileGameText(item BundleItem, file BundleFile, srcPath, 
 
 	os.MkdirAll(filepath.Dir(dstPath), 0755)
 
-	tmpStr := dstPath + ".tmp_str"
+	tmpStr := fmt.Sprintf("%s.%d.tmp_str", dstPath, time.Now().UnixNano())
 	if err := b.copyAndTransform(item, file, srcPath, tmpStr, params); err != nil {
 		return fmt.Errorf("failed to clean STR file %s: %v", srcPath, err)
 	}

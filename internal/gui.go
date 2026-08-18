@@ -159,7 +159,7 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 								Text:        "Execute",
 								Font:        declarative.Font{Bold: true},
 								ToolTipText: "Run the selected sequence of actions.",
-								OnClicked:   mw.executeSequence,
+								OnClicked:   func() { mw.runAsync(mw.executeSequence) },
 							},
 						},
 					},
@@ -171,14 +171,14 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 						MinSize: declarative.Size{Width: 150}, // Increased for better padding
 						MaxSize: declarative.Size{Width: 150},
 						Children: []declarative.Widget{
-							declarative.PushButton{Text: "Snapshot", ToolTipText: "Captures a vanilla baseline of the game directory.", OnClicked: func() { mw.prepareAction(); mw.runSnapshot() }},
-							declarative.PushButton{Text: "Changelog", ToolTipText: "Generates the project changelog.", OnClicked: func() { mw.prepareAction(); mw.runMakeChangeLog() }},
-							declarative.PushButton{Text: "Clean", ToolTipText: "Cleans output directories.", OnClicked: func() { mw.prepareAction(); mw.runClean() }},
-							declarative.PushButton{Text: "Build", ToolTipText: "Builds the selected packs.", OnClicked: func() { mw.prepareAction(); mw.runBuild() }},
-							declarative.PushButton{Text: "Build Release", ToolTipText: "Packages the build into release files.", OnClicked: func() { mw.prepareAction(); mw.runBuildRelease() }},
-							declarative.PushButton{Text: "Install", ToolTipText: "Installs the selected packs.", OnClicked: func() { mw.prepareAction(); mw.runInstall() }},
-							declarative.PushButton{Text: "Run Game", ToolTipText: "Launches the game executable.", OnClicked: func() { mw.prepareAction(); mw.runGame() }},
-							declarative.PushButton{Text: "Uninstall", ToolTipText: "Removes currently installed mod files.", OnClicked: func() { mw.prepareAction(); mw.runUninstall() }},
+							declarative.PushButton{Text: "Snapshot", ToolTipText: "Captures a vanilla baseline of the game directory.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runSnapshot() }) }},
+							declarative.PushButton{Text: "Changelog", ToolTipText: "Generates the project changelog.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runMakeChangeLog() }) }},
+							declarative.PushButton{Text: "Clean", ToolTipText: "Cleans output directories.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runClean() }) }},
+							declarative.PushButton{Text: "Build", ToolTipText: "Builds the selected packs.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runBuild() }) }},
+							declarative.PushButton{Text: "Build Release", ToolTipText: "Packages the build into release files.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runBuildRelease() }) }},
+							declarative.PushButton{Text: "Install", ToolTipText: "Installs the selected packs.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runInstall() }) }},
+							declarative.PushButton{Text: "Run Game", ToolTipText: "Launches the game executable.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runGame() }) }},
+							declarative.PushButton{Text: "Uninstall", ToolTipText: "Removes currently installed mod files.", OnClicked: func() { mw.runAsync(func() { mw.syncRead(mw.prepareAction); mw.runUninstall() }) }},
 							declarative.VSpacer{},
 							declarative.PushButton{Text: "Abort", ToolTipText: "Abort current operations.", OnClicked: mw.runAbort},
 						},
@@ -236,6 +236,7 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 				AssignTo:    &mw.teLog,
 				ReadOnly:    true,
 				VScroll:     true,
+				MaxLength:   10000000,
 				MinSize:     declarative.Size{Height: 120},
 				ToolTipText: "Operation logs and console output.",
 			},
@@ -327,47 +328,86 @@ func Run(items *ModBundleItems, packs *ModBundlePacks, b *ModBuilder) {
 
 // --- Logic & Event Handlers ---
 
+func (mw *ModBuilderWindow) runAsync(action func()) {
+	if mw.updatingUI {
+		return
+	}
+	mw.updatingUI = true
+	go func() {
+		defer mw.Synchronize(func() { mw.updatingUI = false })
+		action()
+	}()
+}
+
 func (mw *ModBuilderWindow) prepareAction() {
 	if mw.cbOptionAutoClear.Checked() {
 		mw.teLog.SetText("")
 	}
-	mw.commitPathsToHistory()
+}
+
+func (mw *ModBuilderWindow) syncRead(action func()) {
+	done := make(chan struct{})
+	mw.Synchronize(func() {
+		action()
+		close(done)
+	})
+	<-done
 }
 
 func (mw *ModBuilderWindow) executeSequence() {
-	mw.prepareAction()
-	mw.builder.Parallel = mw.cbOptionParallel.Checked()
+	var runSnap, runChange, runClean, runBld, runRel, runInst, runRun, runUninst, parallel bool
+	var exeName string
 
-	if mw.cbSequenceSnapshot.Checked() {
+	mw.syncRead(func() {
+		mw.prepareAction()
+		runSnap = mw.cbSequenceSnapshot.Checked()
+		runChange = mw.cbSequenceChangeLog.Checked()
+		runClean = mw.cbSequenceClean.Checked()
+		runBld = mw.cbSequenceBuild.Checked()
+		runRel = mw.cbSequenceRelease.Checked()
+		runInst = mw.cbSequenceInstall.Checked()
+		runRun = mw.cbSequenceRun.Checked()
+		runUninst = mw.cbSequenceUninstall.Checked()
+		parallel = mw.cbOptionParallel.Checked()
+		exeName = mw.cmExe.Text()
+	})
+
+	mw.builder.Parallel = parallel
+
+	if runSnap {
 		// To ensure a truly pristine snapshot, we uninstall the active mod FIRST.
-		mw.builder.Uninstall(mw.cmExe.Text())
+		mw.builder.Uninstall(exeName)
 		mw.runSnapshot()
 	}
-	if mw.cbSequenceChangeLog.Checked() {
+	if runChange {
 		mw.runMakeChangeLog()
 	}
-	if mw.cbSequenceClean.Checked() {
+	if runClean {
 		mw.runClean()
 	}
-	if mw.cbSequenceBuild.Checked() {
+	if runBld {
 		mw.runBuild()
 	}
-	if mw.cbSequenceRelease.Checked() {
+	if runRel {
 		mw.runBuildRelease()
 	}
-	if mw.cbSequenceInstall.Checked() {
+	if runInst {
 		mw.runInstall()
 	}
-	if mw.cbSequenceRun.Checked() {
+	if runRun {
 		mw.runGame()
 	}
-	if mw.cbSequenceUninstall.Checked() {
+	if runUninst {
 		mw.runUninstall()
 	}
 }
 
 func (mw *ModBuilderWindow) runSnapshot() {
-	gameDir := mw.builder.GetGameDir("", mw.cmExe.Text())
+	var exeName string
+	mw.Synchronize(func() {
+		exeName = mw.cmExe.Text()
+	})
+	gameDir := mw.builder.GetGameDir("", exeName)
 	if err := mw.builder.RefreshBaseline(gameDir); err != nil {
 		mw.log(fmt.Sprintf("Error taking snapshot: %v", err))
 	} else {
@@ -376,17 +416,27 @@ func (mw *ModBuilderWindow) runSnapshot() {
 }
 
 func (mw *ModBuilderWindow) runBuild() {
-	mw.builder.Parallel = mw.cbOptionParallel.Checked()
-	indices := mw.lbPacks.SelectedIndexes()
-	if len(indices) == 0 {
+	var parallel bool
+	var selectedPacks []string
+
+	mw.syncRead(func() {
+		parallel = mw.cbOptionParallel.Checked()
+		indices := mw.lbPacks.SelectedIndexes()
+		
+		for _, idx := range indices {
+			if idx >= 0 && idx < len(mw.packs.Bundles.Packs) {
+				name := mw.packs.Bundles.Packs[idx].Name
+				selectedPacks = append(selectedPacks, name)
+			}
+		}
+	})
+
+	if len(selectedPacks) == 0 {
 		mw.log("No packs selected.")
 		return
 	}
-	var selectedPacks []string
-	for _, idx := range indices {
-		selectedPacks = append(selectedPacks, mw.packs.Bundles.Packs[idx].Name)
-	}
 
+	mw.builder.Parallel = parallel
 	if err := mw.builder.BuildAll(selectedPacks...); err != nil {
 		mw.log(fmt.Sprintf("Build failed: %v", err))
 	} else {
@@ -395,17 +445,23 @@ func (mw *ModBuilderWindow) runBuild() {
 }
 
 func (mw *ModBuilderWindow) runBuildRelease() {
-	mw.builder.Parallel = mw.cbOptionParallel.Checked()
-	indices := mw.lbPacks.SelectedIndexes()
-	if len(indices) == 0 {
+	var parallel bool
+	var selectedPacks []string
+
+	mw.syncRead(func() {
+		parallel = mw.cbOptionParallel.Checked()
+		indices := mw.lbPacks.SelectedIndexes()
+		for _, idx := range indices {
+			selectedPacks = append(selectedPacks, mw.packs.Bundles.Packs[idx].Name)
+		}
+	})
+
+	if len(selectedPacks) == 0 {
 		mw.log("No packs selected.")
 		return
 	}
-	var selectedPacks []string
-	for _, idx := range indices {
-		selectedPacks = append(selectedPacks, mw.packs.Bundles.Packs[idx].Name)
-	}
 
+	mw.builder.Parallel = parallel
 	if err := mw.builder.BuildRelease(selectedPacks...); err != nil {
 		mw.log(fmt.Sprintf("Build Release failed: %v", err))
 	} else {
@@ -414,13 +470,23 @@ func (mw *ModBuilderWindow) runBuildRelease() {
 }
 
 func (mw *ModBuilderWindow) runInstall() {
-	exeName := mw.cmExe.Text()
+	var exeName string
+	var allSelectedPacks []BundlePack
+
+	mw.syncRead(func() {
+		exeName = mw.cmExe.Text()
+		indices := mw.lbPacks.SelectedIndexes()
+		for _, idx := range indices {
+			allSelectedPacks = append(allSelectedPacks, mw.packs.Bundles.Packs[idx])
+		}
+	})
+
 	if exeName == "" {
 		exeName = "generals.exe"
 	}
 	gameDir := mw.builder.GetGameDir("_absInstallDir", exeName)
-	indices := mw.lbPacks.SelectedIndexes()
-	if len(indices) == 0 {
+	
+	if len(allSelectedPacks) == 0 {
 		mw.log("No packs selected.")
 		return
 	}
@@ -434,11 +500,6 @@ func (mw *ModBuilderWindow) runInstall() {
 	// Language Filtering Logic
 	finalPacksToInstall := []BundlePack{}
 	var lastLangPack *BundlePack
-
-	allSelectedPacks := []BundlePack{}
-	for _, idx := range indices {
-		allSelectedPacks = append(allSelectedPacks, mw.packs.Bundles.Packs[idx])
-	}
 
 	// Identify the last language pack
 	for i := len(allSelectedPacks) - 1; i >= 0; i-- {
@@ -476,7 +537,10 @@ func (mw *ModBuilderWindow) runInstall() {
 }
 
 func (mw *ModBuilderWindow) runUninstall() {
-	exeName := mw.cmExe.Text()
+	var exeName string
+	mw.Synchronize(func() {
+		exeName = mw.cmExe.Text()
+	})
 	if err := mw.builder.Uninstall(exeName); err != nil {
 		mw.log(fmt.Sprintf("Error during uninstall: %v", err))
 	} else {
@@ -494,8 +558,12 @@ func (mw *ModBuilderWindow) runClean() {
 }
 
 func (mw *ModBuilderWindow) runGame() {
-	exeName := mw.cmExe.Text()
-	args := mw.leLaunchArgs.Text()
+	var exeName, args string
+	mw.Synchronize(func() {
+		exeName = mw.cmExe.Text()
+		args = mw.leLaunchArgs.Text()
+	})
+	
 	if exeName == "" {
 		exeName = "generalszh.exe"
 	}
@@ -805,8 +873,6 @@ func (mw *ModBuilderWindow) reDiscover() {
 
 	if mw.lbPacks != nil {
 		mw.lbPacks.SetModel(mw.packModel)
-		// Selection is now handled dynamically in commitPathsToHistory
-		// so it will no longer arbitrarily clear
 	}
 
 	mw.refreshProjectModel()

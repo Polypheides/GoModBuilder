@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 )
 
 type ToolRunner struct {
@@ -73,7 +74,16 @@ func (tr *ToolRunner) run(cmdPath string, args ...string) error {
 	return nil
 }
 
+var (
+	gbcMutex sync.Mutex
+	gtcMutex sync.Mutex
+	verifiedTools sync.Map
+)
+
 func (tr *ToolRunner) RunBigCreator(args ...string) error {
+	gbcMutex.Lock()
+	defer gbcMutex.Unlock()
+
 	path, err := tr.GetToolPath("generalsbigcreator.exe")
 	if err != nil {
 		return err
@@ -82,6 +92,9 @@ func (tr *ToolRunner) RunBigCreator(args ...string) error {
 }
 
 func (tr *ToolRunner) RunGameTextCompiler(args ...string) error {
+	gtcMutex.Lock()
+	defer gtcMutex.Unlock()
+
 	path, err := tr.GetToolPath("gametextcompiler.exe")
 	if err != nil {
 		return err
@@ -113,8 +126,12 @@ func (tr *ToolRunner) GetToolPath(toolName string) (string, error) {
 	path := filepath.Join(tr.ToolsDir, toolName)
 	if _, err := os.Stat(path); err == nil {
 		if info, ok := DefaultTools[toolName]; ok && info.Hash != "" {
+			if _, verified := verifiedTools.Load(toolName); verified {
+				return path, nil
+			}
+
 			if tr.VerifyHash(path, info.Hash) {
-				tr.log("Tool %s already exists and hash verified.", toolName)
+				verifiedTools.Store(toolName, true)
 				return path, nil
 			}
 			tr.log("WARNING: Tool %s exists but hash mismatch! Removing...", toolName)
