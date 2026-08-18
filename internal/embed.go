@@ -6,10 +6,12 @@ import (
 )
 
 // IconPNG is ALWAYS embedded for the GUI
+//
 //go:embed bin/icon.png
 var IconPNG []byte
 
-//fs embeds the entire tool suite
+// fs embeds the entire tool suite
+//
 //go:embed bin/*
 var fs embed.FS
 
