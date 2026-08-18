@@ -18,7 +18,9 @@ A high-performance, unified Go-based mod building tool for Command & Conquer: Ge
     - **Registry Integration**: Auto-discovery of game paths and registry-based language syncing.
     - **Safe-Backup**: Automatic creation and restoration of `.bak` files for vanilla assets.
 - **Release Packaging**: Integrated 7-Zip (`mx9`) zipping with automated MD5/SHA256 hash generation.
-- **Automation Hooks**: Python-based event hooks and automated changelog generation.
+- **Incremental Caching**: Blazing fast MD5-hash based cache that skips unchanged assets and avoids redundant external tool executions.
+- **Automation Hooks**: Python-based `OnPreBuild` / `OnPostBuild` event hooks (allows you to inject custom scripts without recompiling the Go builder).
+- **Changelog Generator**: 100% Native Go automated changelog generation.
 - **Setup Script**: `gen.go` script for verified tool acquisition and source-to-binary compilation.
 
 ## Getting Started
