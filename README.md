@@ -4,11 +4,13 @@ A high-performance, unified Go-based mod building tool for Command & Conquer: Ge
 
 ## Features
 
-- **Windows GUI**: Native Windows interface built with the `walk` library.
+- **Windows GUI**: Native Windows interface built with the `walk` library, featuring thread-safe background processing and responsive design.
 - **Embedded Tools**: Support for standalone binaries with embedded tools and icons.
-- **Parallel Processing**: Concurrent build engine with a process semaphore to prevent system overload.
+- **Parallel Processing**: Concurrent build engine with a process semaphore to prevent system overload, featuring single-flight architecture to prevent duplicate asset compilation.
+- **Abort & Cancellation**: Graceful shutdown and instant background thread termination across all tools and file I/O operations via `context.Context`.
+- **Unified Lifecycle Logging**: 1:1 logging parity between the terminal, disk log (`GoModBuilder.log`), and GUI output panel.
 - **Recursive Wildcards**: `**` globbing support that mirrors source directory structures.
-- **Texture Support**: Integrated **Crunch** (v1.04) for DDS (DXT1/DXT5) compression.
+- **Texture Support**: Integrated **Crunch** (v1.04) for DDS (DXT1/DXT5) compression with smart raw-copy fallbacks.
 - **Game Text Toolset**: CSF compilation/decompilation with automated language extraction.
 - **Text Filtering**: `excludeMarkersList` support for Core/Optional content logic.
 - **Installation Management**:
