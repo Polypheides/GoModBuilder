@@ -598,18 +598,28 @@ func isPathSafe(name string) bool {
 	return !filepath.IsAbs(clean) && clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
 
-var isCaseInsensitiveFS *bool
+var (
+	caseCheckMap   = make(map[string]bool)
+	caseCheckMutex sync.Mutex
+)
 
 func checkCaseInsensitive(dir string) bool {
-	if isCaseInsensitiveFS != nil {
-		return *isCaseInsensitiveFS
+	caseCheckMutex.Lock()
+	if val, ok := caseCheckMap[dir]; ok {
+		caseCheckMutex.Unlock()
+		return val
 	}
+	caseCheckMutex.Unlock()
+
 	tmpPath := filepath.Join(dir, ".CaseCheck")
 	os.WriteFile(tmpPath, []byte(""), 0644)
 	defer os.Remove(tmpPath)
 	_, err := os.Stat(filepath.Join(dir, ".casecheck"))
 	val := err == nil
-	isCaseInsensitiveFS = &val
+	
+	caseCheckMutex.Lock()
+	caseCheckMap[dir] = val
+	caseCheckMutex.Unlock()
 	return val
 }
 
@@ -695,6 +705,9 @@ func (b *ModBuilder) ZipRelease(packFilters ...string) error {
 				if item.BigSuffix != "" {
 					ext = item.BigSuffix
 				}
+				if !isPathSafe(itemName + ext) {
+					return fmt.Errorf("item '%s' with suffix '%s' escapes release root", itemName, ext)
+				}
 				bigFile := filepath.Join(b.ReleaseDir, itemName+ext)
 				if _, err := os.Stat(bigFile); err == nil {
 					b.log("  Adding to archive: %s", filepath.Base(bigFile))
@@ -749,6 +762,9 @@ func (b *ModBuilder) ZipRelease(packFilters ...string) error {
 						// Fallback to manual file copy if rename fails
 						if cpErr := copyFileFallback(bakZipPath, zipPath); cpErr != nil {
 							errMsg += fmt.Sprintf(". CRITICAL: Rollback failed! rename: %v; copy fallback: %v; original archive at %s", rbErr, cpErr, bakZipPath)
+							os.Remove(zipPath + ".md5")
+							os.Remove(zipPath + ".sha256")
+							os.Remove(zipPath + ".size")
 						} else {
 							if err := os.Remove(bakZipPath); err != nil {
 								b.log("  Warning: failed to remove stale backup %s: %v", bakZipPath, err)
@@ -861,6 +877,10 @@ func (b *ModBuilder) InstallPack(pack BundlePack, targetGameDir string, state *I
 		ext := ".big"
 		if item != nil && item.BigSuffix != "" {
 			ext = item.BigSuffix
+		}
+		if !isPathSafe(itemName + ext) {
+			b.log("  [!] Error: Pack '%s' contains item '%s' with unsafe suffix '%s'", pack.Name, itemName, ext)
+			continue
 		}
 
 		bigFile := filepath.Join(b.ReleaseDir, itemName+ext)
